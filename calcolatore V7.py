@@ -2,6 +2,7 @@ import math
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
 import streamlit as st
+import matplotlib.pyplot as plt
 
 # ============================================================
 # FUNZIONI DI BASE
@@ -9,15 +10,6 @@ import streamlit as st
 
 def poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
-
-def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, float, float]:
-    p1 = 1 / o1 if o1 > 0 else 0.0
-    px = 1 / ox if ox > 0 else 0.0
-    p2 = 1 / o2 if o2 > 0 else 0.0
-    s = p1 + px + p2
-    if s == 0:
-        return 0.33, 0.34, 0.33
-    return p1 / s, px / s, p2 / s
 
 def entropia_poisson(lam: float, max_k: int = 15) -> float:
     e = 0.0
@@ -30,8 +22,18 @@ def entropia_poisson(lam: float, max_k: int = 15) -> float:
 def decimali_a_prob(odds: float) -> float:
     return 1 / odds if odds and odds > 0 else 0.0
 
+def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, float, float]:
+    p1 = 1 / o1 if o1 > 0 else 0.0
+    px = 1 / ox if ox > 0 else 0.0
+    p2 = 1 / o2 if o2 > 0 else 0.0
+    tot = p1 + px + p2
+    if tot == 0:
+        return 0.33, 0.34, 0.33
+    return p1 / tot, px / tot, p2 / tot
+
 def gol_attesi_migliorati(spread: float, total: float,
                           p1: float, p2: float) -> Tuple[float, float]:
+    # piccolo aggiustamento sul total
     if total < 2.25:
         total_eff = total * 1.03
     elif total > 3.0:
@@ -41,11 +43,13 @@ def gol_attesi_migliorati(spread: float, total: float,
 
     base = total_eff / 2.0
     diff = spread / 2.0
-    fattore_int = 1 + (total_eff - 2.5) * 0.15
 
-    lh = (base - diff) * fattore_int
-    la = (base + diff) * fattore_int
+    # intensità in base al total
+    fatt_int = 1 + (total_eff - 2.5) * 0.15
+    lh = (base - diff) * fatt_int
+    la = (base + diff) * fatt_int
 
+    # direzione da 1X2
     fatt_dir = ((p1 - p2) * 0.2) + 1.0
     lh *= fatt_dir
     la /= fatt_dir
@@ -59,6 +63,7 @@ def blend_lambda_market_xg(lambda_market_home: float,
                            xg_for_away: float,
                            xg_against_away: float,
                            w_market: float = 0.6) -> Tuple[float, float]:
+    # stima xG "incrociata"
     xg_home_est = (xg_for_home + xg_against_away) / 2
     xg_away_est = (xg_for_away + xg_against_home) / 2
     lh = w_market * lambda_market_home + (1 - w_market) * xg_home_est
@@ -69,6 +74,7 @@ def max_goals_adattivo(lh: float, la: float) -> int:
     return max(8, int((lh + la) * 2.5))
 
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
+    # correzione per punteggi bassi
     if h == 0 and a == 0:
         return 1 - (lh * la * rho)
     elif h == 0 and a == 1:
@@ -141,8 +147,8 @@ def prob_pari_dispari_from_matrix(mat: List[List[float]]) -> Tuple[float, float]
 
 def prob_clean_sheet_from_matrix(mat: List[List[float]]) -> Tuple[float, float]:
     mg = len(mat) - 1
-    cs_home = sum(mat[h][0] for h in range(mg + 1))
-    cs_away = sum(mat[0][a] for a in range(mg + 1))
+    cs_home = sum(mat[h][0] for h in range(mg + 1))  # ospite 0
+    cs_away = sum(mat[0][a] for a in range(mg + 1))  # casa 0
     return cs_away, cs_home
 
 def dist_gol_da_matrice(mat: List[List[float]]):
@@ -240,7 +246,7 @@ def combo_over_ht_ft(lh: float, la: float) -> Dict[str, float]:
     soglie = [0.5, 1.5, 2.5, 3.5]
     out = {}
     for ht in soglie:
-        lam_ht = (lh + la) / 2
+        lam_ht = (lh + la) * 0.5  # circa primo tempo
         p_under_ht = sum(poisson_pmf(k, lam_ht) for k in range(int(ht) + 1))
         p_over_ht = 1 - p_under_ht
         for ft in soglie:
@@ -250,7 +256,6 @@ def combo_over_ht_ft(lh: float, la: float) -> Dict[str, float]:
             out[f"Over HT {ht} + Over FT {ft}"] = min(1.0, p_over_ht * p_over_ft)
     return out
 
-# 🔴 LA FUNZIONE CHE MANCAVA
 def top_results_from_matrix(mat, top_n=10, soglia_min=0.005):
     mg = len(mat) - 1
     risultati = []
@@ -274,9 +279,13 @@ def risultato_completo(spread: float, total: float,
                        xg_for_away: float = None,
                        xg_against_away: float = None) -> Dict[str, Any]:
 
+    # 1X2 dal mercato
     p1, px, p2 = normalize_1x2_from_odds(odds_1, odds_x, odds_2)
+
+    # gol attesi da spread/total
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
 
+    # se abbiamo xG/campionato li fondiamo
     if (xg_for_home is not None and xg_against_home is not None and
         xg_for_away is not None and xg_against_away is not None):
         lh, la = blend_lambda_market_xg(
@@ -286,46 +295,65 @@ def risultato_completo(spread: float, total: float,
             w_market=0.6
         )
 
-    if odds_btts and odds_btts > 1.0:
+    # correzione rho: se abbiamo quota GG la usiamo
+    if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.8
         rho = max(0.05, min(0.45, rho))
     else:
+        # fallback su X
         rho = 0.15 + (px * 0.4)
         rho = max(0.05, min(0.4, rho))
 
+    # matrici FT e HT
     mat_ft = build_score_matrix(lh, la, rho)
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
+    # esito finale
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
+
+    # over/under
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
     over_35, under_35 = calc_over_under_from_matrix(mat_ft, 3.5)
     over_05_ht = 1 - mat_ht[0][0]
+
+    # BTTS
     btts = calc_bt_ts_from_matrix(mat_ft)
     gg_over25 = calc_gg_over25_from_matrix(mat_ft)
+
+    # pari/dispari
     even_ft, odd_ft = prob_pari_dispari_from_matrix(mat_ft)
     even_ht, odd_ht = prob_pari_dispari_from_matrix(mat_ht)
-    cs_away, cs_home = prob_clean_sheet_from_matrix(mat_ft)
 
+    # clean sheet
+    cs_away, cs_home = prob_clean_sheet_from_matrix(mat_ft)
+    clean_sheet_qualcuno = 1 - btts
+
+    # distribuzioni casa/trasferta
     dist_home_ft, dist_away_ft = dist_gol_da_matrice(mat_ft)
     dist_home_ht, dist_away_ht = dist_gol_da_matrice(mat_ht)
+
+    # multigol classici
     ranges = [(0,1),(1,3),(1,4),(1,5),(2,3),(2,4),(2,5),(3,5)]
     multigol_home = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ft, a, b) for a,b in ranges}
     multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b in ranges}
     multigol_home_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ht, a, b) for a,b in ranges}
     multigol_away_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ht, a, b) for a,b in ranges}
 
+    # combo multigol filtrate
     combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
     combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
 
+    # double chance
     dc = {
         "DC Casa o Pareggio": p_home + p_draw,
         "DC Trasferta o Pareggio": p_away + p_draw,
         "DC Casa o Trasferta": p_home + p_away
     }
 
+    # margine vittoria
     mg = len(mat_ft) - 1
     marg2 = marg3 = 0.0
     for h in range(mg + 1):
@@ -336,6 +364,7 @@ def risultato_completo(spread: float, total: float,
             if h - a >= 3:
                 marg3 += p
 
+    # combo da bookmaker
     combo_book = {
         "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
         "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
@@ -351,8 +380,17 @@ def risultato_completo(spread: float, total: float,
         "2 & BTTS": prob_esito_btts_from_matrix(mat_ft, '2'),
     }
 
+    # combo HT + FT
     combo_ht_ft = combo_over_ht_ft(lh, la)
 
+    # top 10 risultati esatti
+    top10 = top_results_from_matrix(mat_ft, 10, 0.005)
+
+    # entropia
+    ent_home = entropia_poisson(lh)
+    ent_away = entropia_poisson(la)
+
+    # probabilità implicite dalle quote
     odds_prob = {
         "1": decimali_a_prob(odds_1),
         "X": decimali_a_prob(odds_x),
@@ -361,7 +399,7 @@ def risultato_completo(spread: float, total: float,
     scost = {
         "1": (p_home - odds_prob["1"]) * 100,
         "X": (p_draw - odds_prob["X"]) * 100,
-        "2": (p_away - odds_prob["2"]) * 100,
+        "2": (p_away - odds_prob["2"]) * 100
     }
 
     return {
@@ -386,18 +424,21 @@ def risultato_completo(spread: float, total: float,
         "odd_ht": odd_ht,
         "cs_home": cs_home,
         "cs_away": cs_away,
+        "clean_sheet_qualcuno": clean_sheet_qualcuno,
         "multigol_home": multigol_home,
         "multigol_away": multigol_away,
+        "multigol_home_ht": multigol_home_ht,
+        "multigol_away_ht": multigol_away_ht,
         "dc": dc,
         "marg2": marg2,
         "marg3": marg3,
         "combo_ft_filtrate": combo_ft_filtrate,
         "combo_ht_filtrate": combo_ht_filtrate,
-        "combo_ht_ft": combo_ht_ft,
         "combo_book": combo_book,
-        "top10": top_results_from_matrix(mat_ft, 10, 0.005),
-        "ent_home": entropia_poisson(lh),
-        "ent_away": entropia_poisson(la),
+        "combo_ht_ft": combo_ht_ft,
+        "top10": top10,
+        "ent_home": ent_home,
+        "ent_away": ent_away,
         "odds_prob": odds_prob,
         "scost": scost
     }
@@ -406,40 +447,44 @@ def risultato_completo(spread: float, total: float,
 # STREAMLIT APP
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse", layout="wide")
+st.set_page_config(page_title="Modello Scommesse V5", layout="wide")
 
-st.title("📊 Modello Prematch (manuale)")
+st.title("📊 Modello Scommesse V5 – Prematch completo")
+st.caption(f"Aggiornato: {datetime.now().isoformat(timespec='seconds')}")
 
-st.markdown("Inserisci i dati e premi **Calcola modello**.")
+# ---------------- INPUT ----------------
+st.subheader("1. Linee di mercato")
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.subheader("Linea di apertura")
     spread_ap = st.number_input("Spread apertura", value=-0.25, step=0.25)
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
-
 with col2:
-    st.subheader("Linea corrente")
     spread_co = st.number_input("Spread corrente", value=-0.5, step=0.25)
     total_co = st.number_input("Total corrente", value=2.25, step=0.25)
 
-st.subheader("Quote attuali")
-odds_btts = st.number_input("Quota BTTS Sì (GG)", value=1.95, step=0.01)
-odds_1 = st.number_input("Quota 1", value=1.80, step=0.01)
-odds_x = st.number_input("Quota X", value=3.60, step=0.01)
-odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
+st.subheader("2. Quote principali")
+colq1, colq2, colq3, colq4 = st.columns(4)
+with colq1:
+    odds_1 = st.number_input("Quota 1", value=1.80, step=0.01)
+with colq2:
+    odds_x = st.number_input("Quota X", value=3.60, step=0.01)
+with colq3:
+    odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
+with colq4:
+    odds_btts = st.number_input("Quota GG (BTTS sì)", value=1.95, step=0.01)
 
-st.subheader("xG da FBref (facoltativi)")
-colx1, colx2 = st.columns(2)
-with colx1:
-    xg_tot_home = st.text_input("xG totali CASA (es. 14.3)", "")
-    xga_tot_home = st.text_input("xGA totali CASA (es. 9.4)", "")
-    record_home = st.text_input("Record CASA (es. 5-3-2 o 10)", "")
-with colx2:
-    xg_tot_away = st.text_input("xG totali OSPITE", "")
-    xga_tot_away = st.text_input("xGA totali OSPITE", "")
-    record_away = st.text_input("Record OSPITE", "")
+st.subheader("3. xG avanzati (facoltativo) – da FBref/Understat")
+st.markdown("Inserisci xG totali, xGA totali e partite/record. Il modello divide da solo.")
+colxh, colxa = st.columns(2)
+with colxh:
+    xg_tot_home = st.text_input("xG totali squadra di CASA", "")
+    xga_tot_home = st.text_input("xGA totali squadra di CASA", "")
+    record_home = st.text_input("Record/partite CASA (es. 5-3-2 o 10)", "")
+with colxa:
+    xg_tot_away = st.text_input("xG totali squadra OSPITE", "")
+    xga_tot_away = st.text_input("xGA totali squadra OSPITE", "")
+    record_away = st.text_input("Record/partite OSPITE", "")
 
 def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
     if xg_tot_s.strip() == "" or xga_tot_s.strip() == "" or record_s.strip() == "":
@@ -451,7 +496,7 @@ def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
             parts = record_s.split("-")
             matches = sum(int(p) for p in parts if p.strip() != "")
         else:
-            matches = int(record_s)
+            matches = int(record_s.strip())
         if matches <= 0:
             return None, None
         return xg_tot / matches, xga_tot / matches
@@ -461,7 +506,16 @@ def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
 xg_home_for, xg_home_against = parse_xg_block(xg_tot_home, xga_tot_home, record_home)
 xg_away_for, xg_away_against = parse_xg_block(xg_tot_away, xga_tot_away, record_away)
 
+# badge modalità
+if (xg_home_for is None or xg_home_against is None or
+    xg_away_for is None or xg_away_against is None):
+    st.warning("Modalità: BASE (solo spread/total/quote). Inserisci anche xG/xGA per la modalità avanzata.")
+else:
+    st.success("Modalità: AVANZATA (spread/total + quote + xG/xGA).")
+
+# ---------------- CALCOLO ----------------
 if st.button("Calcola modello"):
+    # apertura
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -469,6 +523,7 @@ if st.button("Calcola modello"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
+    # corrente
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -477,51 +532,113 @@ if st.button("Calcola modello"):
         xg_away_for, xg_away_against
     )
 
-    st.success("Calcolo completato.")
+    st.success("Calcolo completato ✅")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.subheader("Esito finale")
-        st.write(f"1 Casa: {ris_co['p_home']*100:.1f}%")
-        st.write(f"X: {ris_co['p_draw']*100:.1f}%")
-        st.write(f"2 Trasferta: {ris_co['p_away']*100:.1f}%")
+    # grafico distribuzione gol
+    st.subheader("📊 Distribuzione gol attesa (Poisson corretta)")
+    lh = ris_co["lambda_home"]
+    la = ris_co["lambda_away"]
+    max_gol = 6
+    gol = list(range(0, max_gol + 1))
+    prob_home = [poisson_pmf(k, lh) for k in gol]
+    prob_away = [poisson_pmf(k, la) for k in gol]
+    fig, ax = plt.subplots()
+    ax.bar([g - 0.15 for g in gol], prob_home, width=0.3, label="Casa")
+    ax.bar([g + 0.15 for g in gol], prob_away, width=0.3, label="Trasferta")
+    ax.set_xticks(gol)
+    ax.set_xlabel("Gol")
+    ax.set_ylabel("Probabilità")
+    ax.set_title("Distribuzione gol prevista")
+    ax.legend()
+    st.pyplot(fig)
 
-    with c2:
-        st.subheader("Goal / Under")
+    # ========== SEZIONI ORDINATE ==========
+
+    # 1. Probabilità principali
+    with st.expander("1️⃣ Probabilità principali", expanded=True):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
+        st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
+        st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
+
+    # 2. Esito finale e parziale
+    with st.expander("2️⃣ Esito finale e parziale"):
+        st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}%")
+        st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}%")
+        st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}%")
+        st.write("Double Chance:")
+        for k, v in ris_co["dc"].items():
+            st.write(f"- {k}: {v*100:.1f}%")
+        st.write("Confronto apertura → corrente:")
+        st.write(f"1: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
+        st.write(f"X: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
+        st.write(f"2: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
+
+    # 3. Over / Under
+    with st.expander("3️⃣ Over / Under"):
         st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
+        st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
         st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
         st.write(f"Under 2.5: {ris_co['under_25']*100:.1f}%")
+        st.write(f"Over 3.5: {ris_co['over_35']*100:.1f}%")
+        st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
         st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
 
-    with c3:
-        st.subheader("Double Chance")
-        for k,v in ris_co["dc"].items():
+    # 4. Gol pari / dispari
+    with st.expander("4️⃣ Gol pari/dispari"):
+        st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
+        st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
+        st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
+        st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
+
+    # 5. Clean Sheet e Gol Attesi
+    with st.expander("5️⃣ Clean Sheet, gol attesi e info modello"):
+        st.write(f"Clean Sheet Casa: {ris_co['cs_home']*100:.1f}%")
+        st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
+        st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
+        st.write(f"Gol attesi Casa (λ): {ris_co['lambda_home']:.3f}")
+        st.write(f"Gol attesi Trasferta (λ): {ris_co['lambda_away']:.3f}")
+        st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
+        st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
+
+    # 6. Multigol Casa
+    with st.expander("6️⃣ Multigol Casa"):
+        st.write({k: f"{v*100:.1f}%" for k, v in ris_co["multigol_home"].items()})
+
+    # 7. Multigol Trasferta
+    with st.expander("7️⃣ Multigol Trasferta"):
+        st.write({k: f"{v*100:.1f}%" for k, v in ris_co["multigol_away"].items()})
+
+    # 8. Vittoria con margine
+    with st.expander("8️⃣ Vittoria con margine"):
+        st.write(f"Vittoria casa almeno 2 gol scarto: {ris_co['marg2']*100:.1f}%")
+        st.write(f"Vittoria casa almeno 3 gol scarto: {ris_co['marg3']*100:.1f}%")
+
+    # 9. Combo mercati (1&Over, DC+BTTS, ecc.)
+    with st.expander("9️⃣ Combo mercati (1&Over, DC+GG, 1&BTTS, ecc.)"):
+        for k, v in ris_co["combo_book"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    st.subheader("Combo Bookmaker")
-    for k, v in ris_co["combo_book"].items():
-        st.write(f"{k}: {v*100:.1f}%")
+    # 10. Risultati esatti
+    with st.expander("🔟 Top 10 risultati esatti"):
+        for h, a, p in ris_co["top10"]:
+            st.write(f"{h}-{a}: {p:.1f}%")
 
-    st.subheader("Multigol Casa")
-    st.write({k: f"{v*100:.1f}%" for k,v in ris_co["multigol_home"].items()})
+    # 11. Combo Multigol filtrate
+    with st.expander("1️⃣1️⃣ Combo Multigol Filtrate (>=50%)"):
+        for c in ris_co["combo_ft_filtrate"]:
+            st.write(f"{c['combo']}: {c['prob']*100:.1f}%")
 
-    st.subheader("Multigol Trasferta")
-    st.write({k: f"{v*100:.1f}%" for k,v in ris_co["multigol_away"].items()})
+    # 12. Combo Over HT + Over FT
+    with st.expander("1️⃣2️⃣ Combo Over HT + Over FT"):
+        for k, v in ris_co["combo_ht_ft"].items():
+            st.write(f"{k}: {v*100:.1f}%")
 
-    st.subheader("Combo Multigol FT (>=50%)")
-    for c in ris_co["combo_ft_filtrate"]:
-        st.write(f"{c['combo']}: {c['prob']*100:.1f}%")
+    # 13. Statistiche avanzate / scostamenti
+    with st.expander("1️⃣3️⃣ Statistiche avanzate e scostamenti vs quote"):
+        st.write("Probabilità implicite dalle quote:")
+        st.write({k: f"{v*100:.2f}%" for k, v in ris_co["odds_prob"].items()})
+        st.write("Scostamento modello vs quote (in punti percentuali):")
+        st.write({k: f"{v:+.2f} pp" for k, v in ris_co["scost"].items()})
 
-    st.subheader("Top 10 risultati esatti")
-    for h,a,p in ris_co["top10"]:
-        st.write(f"{h}-{a}: {p:.1f}%")
-
-    st.subheader("Confronto Apertura → Corrente")
-    st.write(f"1: {ris_co['p_home']*100:.1f}%  (apertura {ris_ap['p_home']*100:.1f}%)")
-    st.write(f"X: {ris_co['p_draw']*100:.1f}%  (apertura {ris_ap['p_draw']*100:.1f}%)")
-    st.write(f"2: {ris_co['p_away']*100:.1f}%  (apertura {ris_ap['p_away']*100:.1f}%)")
-
-    st.caption(f"Generato il {datetime.now().isoformat(timespec='seconds')}")
 else:
-    st.info("Compila i campi e premi **Calcola modello**.")
+    st.info("Compila i campi e premi **Calcola modello** per vedere tutte le categorie.")
