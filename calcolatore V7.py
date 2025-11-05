@@ -250,6 +250,18 @@ def combo_over_ht_ft(lh: float, la: float) -> Dict[str, float]:
             out[f"Over HT {ht} + Over FT {ft}"] = min(1.0, p_over_ht * p_over_ft)
     return out
 
+# 🔴 LA FUNZIONE CHE MANCAVA
+def top_results_from_matrix(mat, top_n=10, soglia_min=0.005):
+    mg = len(mat) - 1
+    risultati = []
+    for h in range(mg + 1):
+        for a in range(mg + 1):
+            p = mat[h][a]
+            if p >= soglia_min:
+                risultati.append((h, a, p * 100))
+    risultati.sort(key=lambda x: x[2], reverse=True)
+    return risultati[:top_n]
+
 # ============================================================
 # MODELLO COMPLETO
 # ============================================================
@@ -265,7 +277,6 @@ def risultato_completo(spread: float, total: float,
     p1, px, p2 = normalize_1x2_from_odds(odds_1, odds_x, odds_2)
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
 
-    # se abbiamo xG medi li fondiamo
     if (xg_for_home is not None and xg_against_home is not None and
         xg_for_away is not None and xg_against_away is not None):
         lh, la = blend_lambda_market_xg(
@@ -275,7 +286,6 @@ def risultato_completo(spread: float, total: float,
             w_market=0.6
         )
 
-    # correzione BTTS -> rho
     if odds_btts and odds_btts > 1.0:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.8
@@ -400,7 +410,7 @@ st.set_page_config(page_title="Modello Scommesse", layout="wide")
 
 st.title("📊 Modello Prematch (manuale)")
 
-st.markdown("Inserisci i dati che prendi da Asianodds / Pinnacle e da FBref. Il modello calcola tutto e ti mostra le combo.")
+st.markdown("Inserisci i dati e premi **Calcola modello**.")
 
 col1, col2 = st.columns(2)
 
@@ -421,7 +431,6 @@ odds_x = st.number_input("Quota X", value=3.60, step=0.01)
 odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
 
 st.subheader("xG da FBref (facoltativi)")
-st.markdown("Vai su FBref → pagina squadra → prendi `xG`, `xGA` e `Record` (somma vittorie+pareggi+sconfitte). Dividiamo noi per le partite.")
 colx1, colx2 = st.columns(2)
 with colx1:
     xg_tot_home = st.text_input("xG totali CASA (es. 14.3)", "")
@@ -453,7 +462,6 @@ xg_home_for, xg_home_against = parse_xg_block(xg_tot_home, xga_tot_home, record_
 xg_away_for, xg_away_against = parse_xg_block(xg_tot_away, xga_tot_away, record_away)
 
 if st.button("Calcola modello"):
-    # apertura
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -461,7 +469,6 @@ if st.button("Calcola modello"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
-    # corrente
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -493,7 +500,6 @@ if st.button("Calcola modello"):
             st.write(f"{k}: {v*100:.1f}%")
 
     st.subheader("Combo Bookmaker")
-    st.write("Calcolate dal modello, non sono le quote reali del book.")
     for k, v in ris_co["combo_book"].items():
         st.write(f"{k}: {v*100:.1f}%")
 
