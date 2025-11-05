@@ -34,7 +34,6 @@ def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, flo
 
 def gol_attesi_migliorati(spread: float, total: float,
                           p1: float, p2: float) -> Tuple[float, float]:
-    # piccola correzione sul total
     if total < 2.25:
         total_eff = total * 1.03
     elif total > 3.0:
@@ -43,11 +42,9 @@ def gol_attesi_migliorati(spread: float, total: float,
         total_eff = total
     base = total_eff / 2.0
     diff = spread / 2.0
-    # fattore intensità
     fatt_int = 1 + (total_eff - 2.5) * 0.15
     lh = (base - diff) * fatt_int
     la = (base + diff) * fatt_int
-    # fattore direzionale da 1x2
     fatt_dir = ((p1 - p2) * 0.2) + 1.0
     lh *= fatt_dir
     la /= fatt_dir
@@ -70,7 +67,6 @@ def max_goals_adattivo(lh: float, la: float) -> int:
     return max(8, int((lh + la) * 2.5))
 
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
-    # correzione bassa per risultati piccoli
     if h == 0 and a == 0:
         return 1 - (lh * la * rho)
     elif h == 0 and a == 1:
@@ -143,8 +139,8 @@ def prob_pari_dispari_from_matrix(mat: List[List[float]]) -> Tuple[float, float]
 
 def prob_clean_sheet_from_matrix(mat: List[List[float]]) -> Tuple[float, float]:
     mg = len(mat) - 1
-    cs_home = sum(mat[h][0] for h in range(mg + 1))  # ospite 0
-    cs_away = sum(mat[0][a] for a in range(mg + 1))  # casa 0
+    cs_home = sum(mat[h][0] for h in range(mg + 1))
+    cs_away = sum(mat[0][a] for a in range(mg + 1))
     return cs_away, cs_home
 
 def dist_gol_da_matrice(mat: List[List[float]]):
@@ -278,7 +274,6 @@ def risultato_completo(spread: float, total: float,
     p1, px, p2 = normalize_1x2_from_odds(odds_1, odds_x, odds_2)
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
 
-    # blend con xG se disponibili
     if (xg_for_home is not None and xg_against_home is not None and
         xg_for_away is not None and xg_against_away is not None):
         lh, la = blend_lambda_market_xg(
@@ -288,7 +283,6 @@ def risultato_completo(spread: float, total: float,
             w_market=0.6
         )
 
-    # rho guidato dal mercato GG se c'è
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.8
@@ -299,7 +293,6 @@ def risultato_completo(spread: float, total: float,
 
     mat_ft = build_score_matrix(lh, la, rho)
 
-    # first half: riduciamo i lambda
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
@@ -425,8 +418,8 @@ def risultato_completo(spread: float, total: float,
 #                    APP STREAMLIT
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse V5.1", layout="wide")
-st.title("📊 Modello Scommesse V5.1 – Prematch completo con archivio")
+st.set_page_config(page_title="Modello Scommesse V5.2", layout="wide")
+st.title("📊 Modello Scommesse V5.2 – Prematch completo con archivio e Value Finder")
 
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
@@ -453,6 +446,14 @@ with col_co2:
 with col_co3:
     odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
     odds_btts = st.number_input("Quota GG (BTTS sì)", value=1.95, step=0.01)
+
+# 2.b Quote Over/Under opzionali
+st.subheader("2.b Quote Over/Under (opzionali, per value finder)")
+col_ou1, col_ou2 = st.columns(2)
+with col_ou1:
+    odds_over25 = st.number_input("Quota Over 2.5 (opzionale)", value=0.0, step=0.01)
+with col_ou2:
+    odds_under25 = st.number_input("Quota Under 2.5 (opzionale)", value=0.0, step=0.01)
 
 # 3. xG opzionali
 st.subheader("3. xG avanzati (opzionali)")
@@ -494,7 +495,6 @@ else:
 
 # 4. Calcolo
 if st.button("CALCOLA MODELLO"):
-    # apertura
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -502,7 +502,6 @@ if st.button("CALCOLA MODELLO"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
-    # corrente
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -588,12 +587,115 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # 1️⃣3️⃣ Scostamenti vs quote
-    with st.expander("1️⃣3️⃣ Scostamenti vs quote"):
+    # 1️⃣3️⃣ Scostamenti vs quote (solo 1X2)
+    with st.expander("1️⃣3️⃣ Scostamenti vs quote (1X2)"):
         st.write("Probabilità implicite dalle quote:")
         st.write({k: f"{v*100:.2f}%" for k, v in ris_co["odds_prob"].items()})
         st.write("Scostamento modello vs quote (in punti %):")
         st.write({k: f"{v:+.2f} pp" for k, v in ris_co["scost"].items()})
+
+    # 1️⃣4️⃣ VALUE FINDER ESTESO
+    with st.expander("1️⃣4️⃣ Value Finder (1X2, GG, Over/Under 2.5)", expanded=True):
+        soglia_pp = 5.0  # soglia di 5 punti percentuali
+        rows = []
+
+        # 1X2
+        rows.append({
+            "Mercato": "1X2",
+            "Esito": "1",
+            "Prob modello %": round(ris_co["p_home"]*100, 2),
+            "Prob quota %": round(ris_co["odds_prob"]["1"]*100, 2),
+            "Δ pp": round(ris_co["scost"]["1"], 2),
+            "Value?": "✅" if ris_co["scost"]["1"] >= soglia_pp else ""
+        })
+        rows.append({
+            "Mercato": "1X2",
+            "Esito": "X",
+            "Prob modello %": round(ris_co["p_draw"]*100, 2),
+            "Prob quota %": round(ris_co["odds_prob"]["X"]*100, 2),
+            "Δ pp": round(ris_co["scost"]["X"], 2),
+            "Value?": "✅" if ris_co["scost"]["X"] >= soglia_pp else ""
+        })
+        rows.append({
+            "Mercato": "1X2",
+            "Esito": "2",
+            "Prob modello %": round(ris_co["p_away"]*100, 2),
+            "Prob quota %": round(ris_co["odds_prob"]["2"]*100, 2),
+            "Δ pp": round(ris_co["scost"]["2"], 2),
+            "Value?": "✅" if ris_co["scost"]["2"] >= soglia_pp else ""
+        })
+
+        # GG
+        prob_gg_model = ris_co["btts"]
+        prob_gg_book = decimali_a_prob(odds_btts)
+        if prob_gg_book > 0:
+            diff_gg = (prob_gg_model - prob_gg_book) * 100
+            rows.append({
+                "Mercato": "GG/NG",
+                "Esito": "GG",
+                "Prob modello %": round(prob_gg_model*100, 2),
+                "Prob quota %": round(prob_gg_book*100, 2),
+                "Δ pp": round(diff_gg, 2),
+                "Value?": "✅" if diff_gg >= soglia_pp else ""
+            })
+        else:
+            rows.append({
+                "Mercato": "GG/NG",
+                "Esito": "GG",
+                "Prob modello %": round(prob_gg_model*100, 2),
+                "Prob quota %": None,
+                "Δ pp": None,
+                "Value?": "Quota GG non inserita"
+            })
+
+        # Over / Under 2.5
+        prob_over_model = ris_co["over_25"]
+        prob_under_model = ris_co["under_25"]
+
+        if odds_over25 and odds_over25 > 1:
+            prob_over_book = decimali_a_prob(odds_over25)
+            diff_over = (prob_over_model - prob_over_book) * 100
+            rows.append({
+                "Mercato": "Over/Under 2.5",
+                "Esito": "Over 2.5",
+                "Prob modello %": round(prob_over_model*100, 2),
+                "Prob quota %": round(prob_over_book*100, 2),
+                "Δ pp": round(diff_over, 2),
+                "Value?": "✅" if diff_over >= soglia_pp else ""
+            })
+        else:
+            rows.append({
+                "Mercato": "Over/Under 2.5",
+                "Esito": "Over 2.5",
+                "Prob modello %": round(prob_over_model*100, 2),
+                "Prob quota %": None,
+                "Δ pp": None,
+                "Value?": "Quota non inserita"
+            })
+
+        if odds_under25 and odds_under25 > 1:
+            prob_under_book = decimali_a_prob(odds_under25)
+            diff_under = (prob_under_model - prob_under_book) * 100
+            rows.append({
+                "Mercato": "Over/Under 2.5",
+                "Esito": "Under 2.5",
+                "Prob modello %": round(prob_under_model*100, 2),
+                "Prob quota %": round(prob_under_book*100, 2),
+                "Δ pp": round(diff_under, 2),
+                "Value?": "✅" if diff_under >= soglia_pp else ""
+            })
+        else:
+            rows.append({
+                "Mercato": "Over/Under 2.5",
+                "Esito": "Under 2.5",
+                "Prob modello %": round(prob_under_model*100, 2),
+                "Prob quota %": None,
+                "Δ pp": None,
+                "Value?": "Quota non inserita"
+            })
+
+        df_value = pd.DataFrame(rows)
+        st.dataframe(df_value)
 
     # ============================================================
     #              SALVATAGGIO SU ARCHIVIO CSV
