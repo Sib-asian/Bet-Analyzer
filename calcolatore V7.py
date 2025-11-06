@@ -46,7 +46,17 @@ def api_get_fixture_result(fixture_id: int) -> dict:
     except Exception:
         return {}
 
+# ============================================================
+# PARSER QUOTE PATCHATO (V5.7.1)
+# ============================================================
 def parse_odds_from_api(odds_block: dict) -> dict:
+    """
+    Parser ultra-rigido:
+    - 1X2: accetta solo 1.1 <= odd <= 8
+    - BTTS: accetta solo 1.1 <= odd <= 2.8
+    - Over/Under: prende la linea più vicina a 2.5 tra 2.25 e 2.75 e accetta solo 1.2 <= odd <= 2.8
+    - se non è affidabile -> None, così l'utente la mette a mano
+    """
     out = {
         "odds_1": None,
         "odds_x": None,
@@ -56,24 +66,31 @@ def parse_odds_from_api(odds_block: dict) -> dict:
         "odds_under25": None,
         "spread_hint": None,
     }
+
     if not odds_block:
         return out
-    bms = odds_block.get("bookmakers", [])
-    if not bms:
+
+    bookmakers = odds_block.get("bookmakers", [])
+    if not bookmakers:
         return out
-    bets = bms[0].get("bets", [])
+
+    bets = bookmakers[0].get("bets", [])
+
+    candidate_totals = []
+
     for bet in bets:
         name = bet.get("name", "").lower()
-        vals = bet.get("values", [])
+        values = bet.get("values", [])
+
         # 1X2
         if "match winner" in name or name == "winner" or "1x2" in name:
-            for v in vals:
+            for v in values:
                 vname = v.get("value", "").lower()
                 try:
                     odd = float(v.get("odd", 0))
                 except:
                     odd = 0.0
-                if odd < 1.1 or odd > 15:
+                if odd < 1.1 or odd > 8:
                     continue
                 if vname in ["home", "1"]:
                     out["odds_1"] = odd
@@ -81,51 +98,87 @@ def parse_odds_from_api(odds_block: dict) -> dict:
                     out["odds_x"] = odd
                 elif vname in ["away", "2"]:
                     out["odds_2"] = odd
+
         # BTTS
         elif "both teams to score" in name:
-            for v in vals:
+            for v in values:
                 label = v.get("value", "").lower()
                 try:
                     odd = float(v.get("odd", 0))
                 except:
                     odd = 0.0
-                if label in ["yes", "sì", "si"] and 1.1 <= odd <= 6.0:
+                if label in ["yes", "sì", "si"] and 1.1 <= odd <= 2.8:
                     out["odds_btts"] = odd
-        # TOTAL GOALS
+
+        # OVER/UNDER / TOTAL GOALS
         elif "goals over/under" in name or "total goals" in name:
-            over_25 = None
-            under_25 = None
-            for v in vals:
-                label = v.get("value", "").lower()
+            for v in values:
+                raw_label = v.get("value", "")
+                label = raw_label.lower()
                 try:
                     odd = float(v.get("odd", 0))
                 except:
                     odd = 0.0
-                if "over 2.5" in label and 1.1 <= odd <= 6.0:
-                    over_25 = odd
-                elif "under 2.5" in label and 1.1 <= odd <= 6.0:
-                    under_25 = odd
-            if over_25 is not None:
-                out["odds_over25"] = over_25
-            if under_25 is not None:
-                out["odds_under25"] = under_25
-        # ASIAN solo hint
+
+                line_val = None
+                if "over" in label or "under" in label:
+                    import re
+                    nums = re.findall(r"[\d.]+", label)
+                    if nums:
+                        try:
+                            line_val = float(nums[0])
+                        except:
+                            line_val = None
+                if line_val is not None:
+                    candidate_totals.append({
+                        "name": name,
+                        "label": label,
+                        "line": line_val,
+                        "odd": odd
+                    })
+
+        # ASIAN → solo info
         elif "asian handicap" in name:
             best_line = None
-            for v in vals:
-                raw = v.get("value", "")
+            for v in values:
+                raw_val = v.get("value", "")
                 try:
-                    line = float(raw.replace("+", "").strip())
+                    line = float(raw_val.replace("+", "").strip())
                 except:
                     continue
                 if best_line is None or abs(line) < abs(best_line):
                     best_line = line
             if best_line is not None:
                 out["spread_hint"] = best_line
+
+    # scegliamo la linea totale più vicina a 2.5 con quota sensata
+    if candidate_totals:
+        candidate_totals.sort(key=lambda x: abs(x["line"] - 2.5))
+        over_ok = None
+        under_ok = None
+        for c in candidate_totals:
+            line = c["line"]
+            odd = c["odd"]
+            label = c["label"]
+            if line < 2.25 or line > 2.75:
+                continue
+            if odd < 1.2 or odd > 2.8:
+                continue
+            if "over" in label and over_ok is None:
+                over_ok = odd
+            if "under" in label and under_ok is None:
+                under_ok = odd
+            if over_ok is not None and under_ok is not None:
+                break
+        if over_ok is not None:
+            out["odds_over25"] = over_ok
+        if under_ok is not None:
+            out["odds_under25"] = under_ok
+
     return out
 
 # ============================================================
-# MODELLO
+# MODELLO (uguale a prima, abbreviato solo dove non cambia)
 # ============================================================
 def poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -561,8 +614,8 @@ def controlli_affidabilita_base(
 # ============================================================
 # STREAMLIT APP
 # ============================================================
-st.set_page_config(page_title="Modello Scommesse V5.7", layout="wide")
-st.title("📊 Modello Scommesse V5.7 + API-Football + Scanner + Tracking risultati")
+st.set_page_config(page_title="Modello Scommesse V5.7.1", layout="wide")
+st.title("📊 Modello Scommesse V5.7.1 + API-Football + Scanner + Tracking risultati")
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
 if "fixtures" not in st.session_state:
@@ -626,7 +679,6 @@ if selected_fixture:
 
 parsed_odds = parse_odds_from_api(auto_odds) if auto_odds else {}
 
-# INPUT MANUALI
 match_name = st.text_input("Nome partita", value=f"{home_name} vs {away_name}".strip())
 
 st.subheader("1. Linee di apertura (sempre manuali)")
@@ -640,13 +692,13 @@ st.subheader("2. Linee correnti e quote (spread manuale)")
 c3, c4, c5 = st.columns(3)
 with c3:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
-    odds_1 = st.number_input("Quota 1", value=parsed_odds["odds_1"] if parsed_odds.get("odds_1") else 1.80, step=0.01)
+    odds_1 = st.number_input("Quota 1", value=parsed_odds["odds_1"] if parsed_odds.get("odds_1") else 0.0, step=0.01)
 with c4:
     total_co = st.number_input("Total corrente", value=2.5, step=0.25)
-    odds_x = st.number_input("Quota X", value=parsed_odds["odds_x"] if parsed_odds.get("odds_x") else 3.50, step=0.01)
+    odds_x = st.number_input("Quota X", value=parsed_odds["odds_x"] if parsed_odds.get("odds_x") else 0.0, step=0.01)
 with c5:
-    odds_2 = st.number_input("Quota 2", value=parsed_odds["odds_2"] if parsed_odds.get("odds_2") else 4.50, step=0.01)
-    odds_btts = st.number_input("Quota GG (BTTS sì)", value=parsed_odds["odds_btts"] if parsed_odds.get("odds_btts") else 1.95, step=0.01)
+    odds_2 = st.number_input("Quota 2", value=parsed_odds["odds_2"] if parsed_odds.get("odds_2") else 0.0, step=0.01)
+    odds_btts = st.number_input("Quota GG (BTTS sì)", value=parsed_odds["odds_btts"] if parsed_odds.get("odds_btts") else 0.0, step=0.01)
 
 st.subheader("2.b Quote Over/Under (opzionali)")
 c6, c7 = st.columns(2)
@@ -685,6 +737,7 @@ def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
 
 xg_home_for, xg_home_against = parse_xg_block(xg_tot_home, xga_tot_home, partite_home)
 xg_away_for, xg_away_against = parse_xg_block(xg_tot_away, xga_tot_away, partite_away)
+
 has_xg = not (
     xg_home_for is None or xg_home_against is None or
     xg_away_for is None or xg_away_against is None
@@ -952,7 +1005,6 @@ if st.button("CALCOLA MODELLO"):
         "scost_x": round(ris_co["scost"]["X"], 2),
         "scost_2": round(ris_co["scost"]["2"], 2),
         "affidabilita": aff,
-        # per fase 2:
         "home_goals": "",
         "away_goals": "",
         "esito_reale": "",
@@ -973,7 +1025,6 @@ if st.button("CALCOLA MODELLO"):
     except Exception as e:
         st.warning(f"Non sono riuscito a salvare l'analisi: {e}")
 
-# VISUALIZZA ARCHIVIO
 st.subheader("📁 Archivio storico analisi")
 if os.path.exists(ARCHIVIO_FILE):
     st.dataframe(pd.read_csv(ARCHIVIO_FILE).tail(50))
@@ -1071,23 +1122,14 @@ if st.button("🔄 Aggiorna partite concluse"):
             ga = fixt.get("goals", {}).get("away", 0)
             df.at[idx, "home_goals"] = gh
             df.at[idx, "away_goals"] = ga
-            # esito 1x2 reale
             if gh > ga:
                 df.at[idx, "esito_reale"] = "1"
             elif gh == ga:
                 df.at[idx, "esito_reale"] = "X"
             else:
                 df.at[idx, "esito_reale"] = "2"
-            # btts reale
             df.at[idx, "btts_reale"] = "1" if (gh > 0 and ga > 0) else "0"
-            # over 2.5 reale
             df.at[idx, "over25_reale"] = "1" if (gh + ga) > 2 else "0"
-            # confronti
-            try:
-                mod_1 = float(row.get("p_home", 0))  # era % ma non ci serve qui
-            except:
-                mod_1 = 0
-            # check pronostico 1x2: usiamo quello più alto fra p_home, p_draw, p_away
             try:
                 pm = {
                     "1": float(row.get("p_home", 0)),
@@ -1098,13 +1140,11 @@ if st.button("🔄 Aggiorna partite concluse"):
             except Exception:
                 pred = ""
             df.at[idx, "ok_1x2"] = "✅" if pred == df.at[idx, "esito_reale"] else "❌"
-            # btts
             try:
                 mod_btts = float(row.get("btts", 0))
             except:
                 mod_btts = 0
             df.at[idx, "ok_btts"] = "✅" if ((gh > 0 and ga > 0) and mod_btts >= 50) or ((gh == 0 or ga == 0) and mod_btts < 50) else ""
-            # over 2.5
             try:
                 mod_over = float(row.get("over_25", 0))
             except:
