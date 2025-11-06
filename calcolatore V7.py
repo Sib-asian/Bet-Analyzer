@@ -1,12 +1,148 @@
 import math
 from typing import Dict, Any, List, Tuple
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 import os
+import requests
 import streamlit as st
 
 # ============================================================
-#                  FUNZIONI DI BASE
+#                CONFIGURAZIONE API FOOTBALL
+# ============================================================
+API_KEY = "95c43f936816cd4389a747fd2cfe061a"
+API_BASE = "https://v3.football.api-sports.io"
+PINNACLE_ID = 11  # bookmaker Pinnacle
+
+# ============================================================
+#                FUNZIONI DI SUPPORTO API
+# ============================================================
+
+def api_get_fixtures_by_date(d: str) -> list:
+    """Ritorna la lista dei fixture per una data (YYYY-MM-DD)."""
+    headers = {"x-apisports-key": API_KEY}
+    params = {"date": d}
+    try:
+        r = requests.get(f"{API_BASE}/fixtures", headers=headers, params=params, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("response", [])
+    except Exception:
+        return []
+
+def api_get_odds_by_fixture(fixture_id: int, bookmaker_id: int = PINNACLE_ID) -> dict:
+    """Ritorna le odds per una partita specifica (se disponibili)."""
+    headers = {"x-apisports-key": API_KEY}
+    params = {"fixture": fixture_id, "bookmaker": bookmaker_id}
+    try:
+        r = requests.get(f"{API_BASE}/odds", headers=headers, params=params, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        resp = data.get("response", [])
+        return resp[0] if resp else {}
+    except Exception:
+        return {}
+
+def parse_odds_from_api(odds_block: dict) -> dict:
+    """
+    Prova a estrarre da API-Football:
+    - 1X2
+    - GG/NG
+    - Goals Over/Under (cerchiamo 2.5)
+    - Asian Handicap (per dedurre uno spread indicativo)
+    Restituisce un dizionario con i campi che siamo riusciti a trovare.
+    """
+    result = {
+        "odds_1": None,
+        "odds_x": None,
+        "odds_2": None,
+        "odds_btts": None,
+        "odds_over25": None,
+        "odds_under25": None,
+        "spread_hint": None,
+    }
+    if not odds_block:
+        return result
+    bookmakers = odds_block.get("bookmakers", [])
+    if not bookmakers:
+        return result
+    # di solito c'è un solo bookmaker perché lo abbiamo filtrato
+    bets = bookmakers[0].get("bets", [])
+    for bet in bets:
+        name = bet.get("name", "").lower()
+        values = bet.get("values", [])
+        # 1X2
+        if "match winner" in name or "winner" in name:
+            # values: [{"value":"Home","odd":"1.80"}, {"value":"Draw","odd":"3.50"}, ...]
+            for v in values:
+                vname = v.get("value", "").lower()
+                odd = float(v.get("odd", 0))
+                if vname in ["home", "1"]:
+                    result["odds_1"] = odd
+                elif vname in ["draw", "x"]:
+                    result["odds_x"] = odd
+                elif vname in ["away", "2"]:
+                    result["odds_2"] = odd
+        # BTTS
+        elif "both teams to score" in name:
+            for v in values:
+                if v.get("value", "").lower() in ["yes", "sì", "si"]:
+                    result["odds_btts"] = float(v.get("odd", 0))
+        # OVER/UNDER GOALS
+        elif "goals over/under" in name or "total goals" in name:
+            # values tipo: {"value":"Over 2.5","odd":"1.95"}
+            over_candidates = {}
+            under_candidates = {}
+            for v in values:
+                vv = v.get("value", "").lower()
+                odd = float(v.get("odd", 0))
+                if "over" in vv:
+                    try:
+                        line = float(vv.replace("over", "").strip())
+                        over_candidates[line] = odd
+                    except:
+                        pass
+                elif "under" in vv:
+                    try:
+                        line = float(vv.replace("under", "").strip())
+                        under_candidates[line] = odd
+                    except:
+                        pass
+            # scegliamo 2.5 se c'è
+            if 2.5 in over_candidates:
+                result["odds_over25"] = over_candidates[2.5]
+            else:
+                # prendiamo la linea più vicina a 2.5
+                if over_candidates:
+                    nearest = min(over_candidates.keys(), key=lambda x: abs(x - 2.5))
+                    result["odds_over25"] = over_candidates[nearest]
+            if 2.5 in under_candidates:
+                result["odds_under25"] = under_candidates[2.5]
+            else:
+                if under_candidates:
+                    nearest = min(under_candidates.keys(), key=lambda x: abs(x - 2.5))
+                    result["odds_under25"] = under_candidates[nearest]
+        # ASIAN HANDICAP
+        elif "asian handicap" in name:
+            # values: {"value":"-0.5","odd":"1.90"} ... generalmente riferite alla squadra di casa
+            # prendiamo la linea più vicina allo 0
+            best_line = None
+            best_odd = None
+            for v in values:
+                try:
+                    line = float(v.get("value").replace("+", "").strip())
+                    odd = float(v.get("odd", 0))
+                    if best_line is None or abs(line) < abs(best_line):
+                        best_line = line
+                        best_odd = odd
+                except:
+                    continue
+            # se la linea è negativa vuol dire che la casa è favorita di quella quota
+            if best_line is not None:
+                result["spread_hint"] = best_line  # es: -0.5
+    return result
+
+# ============================================================
+#                  FUNZIONI MODELLO (V5.4)
 # ============================================================
 
 def poisson_pmf(k: int, lam: float) -> float:
@@ -34,7 +170,6 @@ def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, flo
 
 def gol_attesi_migliorati(spread: float, total: float,
                           p1: float, p2: float) -> Tuple[float, float]:
-    # piccola correzione sul total per estremi
     if total < 2.25:
         total_eff = total * 1.03
     elif total > 3.0:
@@ -46,7 +181,6 @@ def gol_attesi_migliorati(spread: float, total: float,
     fatt_int = 1 + (total_eff - 2.5) * 0.15
     lh = (base - diff) * fatt_int
     la = (base + diff) * fatt_int
-    # direzione da 1x2
     fatt_dir = ((p1 - p2) * 0.2) + 1.0
     lh *= fatt_dir
     la /= fatt_dir
@@ -261,10 +395,6 @@ def top_results_from_matrix(mat, top_n=10, soglia_min=0.005):
     risultati.sort(key=lambda x: x[2], reverse=True)
     return risultati[:top_n]
 
-# ============================================================
-#            MODELLO COMPLETO (AP vs CO)
-# ============================================================
-
 def risultato_completo(spread: float, total: float,
                        odds_1: float, odds_x: float, odds_2: float,
                        odds_btts: float,
@@ -294,17 +424,14 @@ def risultato_completo(spread: float, total: float,
         rho = max(0.05, min(0.4, rho))
 
     mat_ft = build_score_matrix(lh, la, rho)
-
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
-
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
     over_35, under_35 = calc_over_under_from_matrix(mat_ft, 3.5)
     over_05_ht = 1 - mat_ht[0][0]
-
     btts = calc_bt_ts_from_matrix(mat_ft)
     gg_over25 = calc_gg_over25_from_matrix(mat_ft)
 
@@ -358,7 +485,6 @@ def risultato_completo(spread: float, total: float,
     }
 
     combo_ht_ft = combo_over_ht_ft(lh, la)
-
     top10 = top_results_from_matrix(mat_ft, 10, 0.005)
 
     ent_home = entropia_poisson(lh)
@@ -417,52 +543,92 @@ def risultato_completo(spread: float, total: float,
     }
 
 # ============================================================
-#                    APP STREAMLIT
+#                   STREAMLIT APP
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse V5.4", layout="wide")
-st.title("📊 Modello Scommesse V5.4 – prematch completo + value + affidabilità")
+st.set_page_config(page_title="Modello Scommesse V5.4 + API", layout="wide")
+st.title("📊 Modello Scommesse V5.4 + API-Football")
 
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
-# 0. Nome partita
-match_name = st.text_input("Nome partita (es. Juventus - Torino)", value="")
+# 0. Scegli data e scarica partite
+st.subheader("0. Seleziona partita da API")
+today_str = date.today().strftime("%Y-%m-%d")
+api_date = st.text_input("Data (YYYY-MM-DD)", value=today_str)
 
-# 1. Linee di apertura
-st.subheader("1. Linee di apertura")
+fixtures = []
+if st.button("🔎 Carica partite da API-Football"):
+    fixtures = api_get_fixtures_by_date(api_date)
+else:
+    fixtures = []
+
+fixture_map = {}
+if fixtures:
+    for f in fixtures:
+        fid = f["fixture"]["id"]
+        home = f["teams"]["home"]["name"]
+        away = f["teams"]["away"]["name"]
+        fixture_map[f"{fid} - {home} vs {away}"] = fid
+
+if fixture_map:
+    selected_fixture = st.selectbox("Partita trovata", list(fixture_map.keys()))
+else:
+    selected_fixture = None
+
+# Proviamo a prendere le odds se c'è un fixture selezionato
+auto_odds = {}
+home_name = ""
+away_name = ""
+if selected_fixture:
+    fid = fixture_map[selected_fixture]
+    auto_odds = api_get_odds_by_fixture(fid, PINNACLE_ID)
+    # estraiamo i nomi
+    for f in fixtures:
+        if f["fixture"]["id"] == fid:
+            home_name = f["teams"]["home"]["name"]
+            away_name = f["teams"]["away"]["name"]
+            break
+    st.info(f"Partita selezionata: {home_name} vs {away_name}")
+
+parsed_odds = parse_odds_from_api(auto_odds) if auto_odds else {}
+
+# ============================================================
+#             INPUT MANUALI (CON PREFILL DA API)
+# ============================================================
+
+match_name = st.text_input("Nome partita (puoi lasciare quello auto)", value=f"{home_name} vs {away_name}".strip())
+
+st.subheader("1. Linee di apertura (manuali)")
 col_ap1, col_ap2 = st.columns(2)
 with col_ap1:
-    spread_ap = st.number_input("Spread apertura", value=-0.25, step=0.25)
+    spread_ap = st.number_input("Spread apertura", value=0.0, step=0.25)
 with col_ap2:
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
 
-# 2. Linee correnti + quote
-st.subheader("2. Linee correnti e quote")
+st.subheader("2. Linee correnti e quote (precompilate se l'API le ha trovate)")
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
-    spread_co = st.number_input("Spread corrente", value=-0.5, step=0.25)
-    odds_1 = st.number_input("Quota 1", value=1.80, step=0.01)
+    spread_co = st.number_input("Spread corrente", value=parsed_odds["spread_hint"] if parsed_odds.get("spread_hint") is not None else 0.0, step=0.25)
+    odds_1 = st.number_input("Quota 1", value=parsed_odds["odds_1"] if parsed_odds.get("odds_1") else 1.80, step=0.01)
 with col_co2:
-    total_co = st.number_input("Total corrente", value=2.25, step=0.25)
-    odds_x = st.number_input("Quota X", value=3.60, step=0.01)
+    total_co = st.number_input("Total corrente", value=2.5, step=0.25)
+    odds_x = st.number_input("Quota X", value=parsed_odds["odds_x"] if parsed_odds.get("odds_x") else 3.50, step=0.01)
 with col_co3:
-    odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
-    odds_btts = st.number_input("Quota GG (BTTS sì)", value=1.95, step=0.01)
+    odds_2 = st.number_input("Quota 2", value=parsed_odds["odds_2"] if parsed_odds.get("odds_2") else 4.50, step=0.01)
+    odds_btts = st.number_input("Quota GG (BTTS sì)", value=parsed_odds["odds_btts"] if parsed_odds.get("odds_btts") else 1.95, step=0.01)
 
-# 2.b Quote Over/Under opzionali
-st.subheader("2.b Quote Over/Under (opzionali, per value finder)")
+st.subheader("2.b Quote Over/Under (opzionali)")
 col_ou1, col_ou2 = st.columns(2)
 with col_ou1:
-    odds_over25 = st.number_input("Quota Over 2.5 (opzionale)", value=0.0, step=0.01)
+    odds_over25 = st.number_input("Quota Over 2.5 (opzionale)", value=parsed_odds["odds_over25"] if parsed_odds.get("odds_over25") else 0.0, step=0.01)
 with col_ou2:
-    odds_under25 = st.number_input("Quota Under 2.5 (opzionale)", value=0.0, step=0.01)
+    odds_under25 = st.number_input("Quota Under 2.5 (opzionale)", value=parsed_odds["odds_under25"] if parsed_odds.get("odds_under25") else 0.0, step=0.01)
 
-# 3. xG opzionali
 st.subheader("3. xG avanzati (opzionali)")
 col_xg1, col_xg2 = st.columns(2)
 with col_xg1:
-    xg_tot_home = st.text_input("xG totali CASA (es. 16.40)", "")
-    xga_tot_home = st.text_input("xGA totali CASA (es. 10.30)", "")
+    xg_tot_home = st.text_input("xG totali CASA", "")
+    xga_tot_home = st.text_input("xGA totali CASA", "")
     partite_home = st.text_input("Partite giocate CASA (es. 10 o 5-3-2)", "")
 with col_xg2:
     xg_tot_away = st.text_input("xG totali OSPITE", "")
@@ -491,13 +657,15 @@ xg_away_for, xg_away_against = parse_xg_block(xg_tot_away, xga_tot_away, partite
 
 if (xg_home_for is None or xg_home_against is None or
     xg_away_for is None or xg_away_against is None):
-    st.info("Modalità: BASE (solo spread/total/quote). Inserisci xG/xGA per usare anche i dati avanzati.")
+    st.info("Modalità: BASE (solo spread/total/quote). Inserisci xG/xGA per la modalità avanzata.")
 else:
     st.success("Modalità: AVANZATA (spread/total + quote + xG/xGA).")
 
-# 4. Calcolo
+# ============================================================
+#                    CALCOLO MODELLO
+# ============================================================
+
 if st.button("CALCOLA MODELLO"):
-    # apertura
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -505,7 +673,6 @@ if st.button("CALCOLA MODELLO"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
-    # corrente
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -516,11 +683,7 @@ if st.button("CALCOLA MODELLO"):
 
     st.success("Calcolo completato ✅")
 
-    # ============================================================
-    #      1) SEZIONE IN CIMA: AFFIDABILITÀ + MOVIMENTO + EV
-    # ============================================================
-
-    # Affidabilità match
+    # Affidabilità
     aff = 100
     if abs(spread_ap - spread_co) > 0.25:
         aff -= 15
@@ -533,7 +696,7 @@ if st.button("CALCOLA MODELLO"):
         aff -= 10
     aff = max(0, min(100, aff))
 
-    # Movimento mercato
+    # Movimento
     delta_spread = spread_co - spread_ap
     delta_total = total_co - total_ap
 
@@ -561,15 +724,10 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
-    # ============================================================
-    #      2) VALUE FINDER + EV
-    # ============================================================
+    # VALUE FINDER
     st.subheader("💰 Value Finder + EV")
-
-    soglia_pp = 5.0  # soglia value in punti percentuali
+    soglia_pp = 5.0
     rows = []
-
-    # 1X2
     for lab, p_mod, p_book, odd in [
         ("1", ris_co["p_home"], ris_co["odds_prob"]["1"], odds_1),
         ("X", ris_co["p_draw"], ris_co["odds_prob"]["X"], odds_x),
@@ -668,11 +826,8 @@ if st.button("CALCOLA MODELLO"):
     df_value = pd.DataFrame(rows)
     st.dataframe(df_value)
 
-    # ============================================================
-    #      3) TUTTO IL PAPIRO COME PRIMA
-    # ============================================================
-
-    with st.expander("1️⃣ Probabilità principali", expanded=False):
+    # ================= PAPIRO ===================
+    with st.expander("1️⃣ Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
         st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
         st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
@@ -719,7 +874,7 @@ if st.button("CALCOLA MODELLO"):
         st.write(f"Vittoria casa almeno 2 gol scarto: {ris_co['marg2']*100:.1f}%")
         st.write(f"Vittoria casa almeno 3 gol scarto: {ris_co['marg3']*100:.1f}%")
 
-    with st.expander("9️⃣ Combo mercati (1&Over, DC+GG, 1&BTTS, ecc.)"):
+    with st.expander("9️⃣ Combo mercati (1&Over, DC+GG, ecc.)"):
         for k, v in ris_co["combo_book"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
@@ -735,11 +890,8 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # ============================================================
-    #              SALVATAGGIO SU ARCHIVIO CSV
-    # ============================================================
+    # ARCHIVIO
     archivio_nome = "storico_analisi.csv"
-
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "match": match_name,
@@ -774,14 +926,8 @@ if st.button("CALCOLA MODELLO"):
     except Exception as e:
         st.warning(f"Non sono riuscito a salvare l'analisi: {e}")
 
-# ============================================================
-#               SEZIONE ARCHIVIO STORICO
-# ============================================================
-
 st.subheader("📁 Archivio storico analisi")
-archivio_nome = "storico_analisi.csv"
-if os.path.exists(archivio_nome):
-    df_arch = pd.read_csv(archivio_nome)
-    st.dataframe(df_arch.tail(50))
+if os.path.exists("storico_analisi.csv"):
+    st.dataframe(pd.read_csv("storico_analisi.csv").tail(50))
 else:
-    st.info("Nessun archivio trovato (ancora nessuna analisi salvata).")
+    st.info("Nessun archivio trovato.")
