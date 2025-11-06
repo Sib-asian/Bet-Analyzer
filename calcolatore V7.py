@@ -44,12 +44,12 @@ def api_get_odds_by_fixture(fixture_id: int, bookmaker_id: int = PINNACLE_ID) ->
 
 def parse_odds_from_api(odds_block: dict) -> dict:
     """
-    Prova a estrarre da API-Football:
-    - 1X2
-    - GG/NG
-    - Goals Over/Under (cerchiamo 2.5)
-    - Asian Handicap (per dedurre uno spread indicativo)
-    Restituisce un dizionario con i campi che siamo riusciti a trovare.
+    Parser più rigido:
+    - prende SOLO il mercato 1X2 principale
+    - prende SOLO BTTS (Yes)
+    - prende SOLO Over 2.5 e Under 2.5
+    - scarta quote palesemente sbagliate
+    - prende l’Asian più vicina allo 0 per eventuali usi (ma NON la usiamo per prefill)
     """
     result = {
         "odds_1": None,
@@ -60,75 +60,86 @@ def parse_odds_from_api(odds_block: dict) -> dict:
         "odds_under25": None,
         "spread_hint": None,
     }
+
     if not odds_block:
         return result
+
     bookmakers = odds_block.get("bookmakers", [])
     if not bookmakers:
         return result
+
     bets = bookmakers[0].get("bets", [])
+
     for bet in bets:
         name = bet.get("name", "").lower()
         values = bet.get("values", [])
-        # 1X2
-        if "match winner" in name or "winner" in name:
+
+        # 1X2 / Match Winner
+        if "match winner" in name or name == "winner" or "1x2" in name:
             for v in values:
                 vname = v.get("value", "").lower()
-                odd = float(v.get("odd", 0))
+                try:
+                    odd = float(v.get("odd", 0))
+                except:
+                    odd = 0.0
+
+                if odd < 1.1 or odd > 15:
+                    continue
+
                 if vname in ["home", "1"]:
                     result["odds_1"] = odd
                 elif vname in ["draw", "x"]:
                     result["odds_x"] = odd
                 elif vname in ["away", "2"]:
                     result["odds_2"] = odd
+
         # BTTS
         elif "both teams to score" in name:
             for v in values:
-                if v.get("value", "").lower() in ["yes", "sì", "si"]:
-                    result["odds_btts"] = float(v.get("odd", 0))
-        # OVER/UNDER
+                label = v.get("value", "").lower()
+                try:
+                    odd = float(v.get("odd", 0))
+                except:
+                    odd = 0.0
+
+                if label in ["yes", "sì", "si"] and 1.1 <= odd <= 6.0:
+                    result["odds_btts"] = odd
+
+        # OVER/UNDER GOALS
         elif "goals over/under" in name or "total goals" in name:
-            over_candidates = {}
-            under_candidates = {}
+            over_25 = None
+            under_25 = None
             for v in values:
-                vv = v.get("value", "").lower()
-                odd = float(v.get("odd", 0))
-                if "over" in vv:
-                    try:
-                        line = float(vv.replace("over", "").strip())
-                        over_candidates[line] = odd
-                    except:
-                        pass
-                elif "under" in vv:
-                    try:
-                        line = float(vv.replace("under", "").strip())
-                        under_candidates[line] = odd
-                    except:
-                        pass
-            if 2.5 in over_candidates:
-                result["odds_over25"] = over_candidates[2.5]
-            else:
-                if over_candidates:
-                    nearest = min(over_candidates.keys(), key=lambda x: abs(x - 2.5))
-                    result["odds_over25"] = over_candidates[nearest]
-            if 2.5 in under_candidates:
-                result["odds_under25"] = under_candidates[2.5]
-            else:
-                if under_candidates:
-                    nearest = min(under_candidates.keys(), key=lambda x: abs(x - 2.5))
-                    result["odds_under25"] = under_candidates[nearest]
-        # ASIAN HANDICAP
+                label = v.get("value", "").lower()
+                try:
+                    odd = float(v.get("odd", 0))
+                except:
+                    odd = 0.0
+
+                if "over 2.5" in label and 1.1 <= odd <= 6.0:
+                    over_25 = odd
+                elif "under 2.5" in label and 1.1 <= odd <= 6.0:
+                    under_25 = odd
+
+            if over_25 is not None:
+                result["odds_over25"] = over_25
+            if under_25 is not None:
+                result["odds_under25"] = under_25
+
+        # ASIAN HANDICAP → solo per info
         elif "asian handicap" in name:
             best_line = None
             for v in values:
+                raw_val = v.get("value", "")
                 try:
-                    # es: "-0.5"
-                    line = float(v.get("value").replace("+", "").strip())
-                    if best_line is None or abs(line) < abs(best_line):
-                        best_line = line
+                    line = float(raw_val.replace("+", "").strip())
                 except:
                     continue
+                if best_line is None or abs(line) < abs(best_line):
+                    best_line = line
             if best_line is not None:
                 result["spread_hint"] = best_line
+
     return result
 
 # ============================================================
@@ -160,7 +171,6 @@ def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, flo
 
 def gol_attesi_migliorati(spread: float, total: float,
                           p1: float, p2: float) -> Tuple[float, float]:
-    # aggiustino di total
     if total < 2.25:
         total_eff = total * 1.03
     elif total > 3.0:
@@ -172,7 +182,6 @@ def gol_attesi_migliorati(spread: float, total: float,
     fatt_int = 1 + (total_eff - 2.5) * 0.15
     lh = (base - diff) * fatt_int
     la = (base + diff) * fatt_int
-    # aggiustino direzionale
     fatt_dir = ((p1 - p2) * 0.2) + 1.0
     lh *= fatt_dir
     la /= fatt_dir
@@ -542,7 +551,7 @@ st.set_page_config(page_title="Modello Scommesse V5.4 + API", layout="wide")
 st.title("📊 Modello Scommesse V5.4 + API-Football")
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
-# === SESSION STATE per non perdere la selezione ===
+# Session state
 if "fixtures" not in st.session_state:
     st.session_state.fixtures = []
 if "selected_fixture" not in st.session_state:
@@ -583,7 +592,6 @@ else:
 
 selected_fixture = st.session_state.selected_fixture
 
-# Proviamo a prendere le odds se c'è un fixture selezionato
 auto_odds = {}
 home_name = ""
 away_name = ""
@@ -600,7 +608,7 @@ if selected_fixture:
 parsed_odds = parse_odds_from_api(auto_odds) if auto_odds else {}
 
 # ============================================================
-#             INPUT MANUALI (CON PREFILL DA API)
+#             INPUT MANUALI (CON PREFILL SOLO QUOTE)
 # ============================================================
 
 match_name = st.text_input("Nome partita", value=f"{home_name} vs {away_name}".strip())
@@ -612,10 +620,11 @@ with col_ap1:
 with col_ap2:
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
 
-st.subheader("2. Linee correnti e quote (precompilate se l'API le ha trovate)")
+st.subheader("2. Linee correnti e quote (spread manuale)")
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
-    spread_co = st.number_input("Spread corrente", value=parsed_odds["spread_hint"] if parsed_odds.get("spread_hint") is not None else 0.0, step=0.25)
+    # 👇 spread corrente NON precompilato
+    spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
     odds_1 = st.number_input("Quota 1", value=parsed_odds["odds_1"] if parsed_odds.get("odds_1") else 1.80, step=0.01)
 with col_co2:
     total_co = st.number_input("Total corrente", value=2.5, step=0.25)
@@ -673,7 +682,6 @@ else:
 # ============================================================
 
 if st.button("CALCOLA MODELLO"):
-    # apertura
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -681,7 +689,6 @@ if st.button("CALCOLA MODELLO"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
-    # corrente
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -692,7 +699,6 @@ if st.button("CALCOLA MODELLO"):
 
     st.success("Calcolo completato ✅")
 
-    # Affidabilità
     aff = 100
     if abs(spread_ap - spread_co) > 0.25:
         aff -= 15
@@ -705,7 +711,6 @@ if st.button("CALCOLA MODELLO"):
         aff -= 10
     aff = max(0, min(100, aff))
 
-    # Movimento
     delta_spread = spread_co - spread_ap
     delta_total = total_co - total_ap
 
@@ -733,7 +738,6 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
-    # VALUE FINDER
     st.subheader("💰 Value Finder + EV")
     soglia_pp = 5.0
     rows = []
@@ -754,7 +758,6 @@ if st.button("CALCOLA MODELLO"):
             "Value?": "✅" if diff >= soglia_pp else ""
         })
 
-    # GG
     prob_gg_model = ris_co["btts"]
     prob_gg_book = decimali_a_prob(odds_btts)
     if prob_gg_book > 0:
@@ -780,7 +783,6 @@ if st.button("CALCOLA MODELLO"):
             "Value?": "Quota GG non inserita"
         })
 
-    # Over / Under 2.5
     prob_over_model = ris_co["over_25"]
     prob_under_model = ris_co["under_25"]
 
@@ -899,7 +901,6 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # ARCHIVIO
     archivio_nome = "storico_analisi.csv"
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
