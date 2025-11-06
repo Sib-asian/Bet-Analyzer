@@ -19,7 +19,7 @@ ARCHIVE_FILE = "storico_analisi.csv"
 # ============================================================
 
 def api_get_fixtures_by_date(d: str) -> list:
-    """Ritorna la lista dei fixture per una data (YYYY-MM-DD). Usato dallo scanner e dal sync risultati."""
+    """Ritorna la lista dei fixture per una data (YYYY-MM-DD)."""
     headers = {"x-apisports-key": API_KEY}
     params = {"date": d}
     try:
@@ -31,7 +31,7 @@ def api_get_fixtures_by_date(d: str) -> list:
         return []
 
 def api_get_odds_by_fixture(fixture_id: int, bookmaker_id: int = PINNACLE_ID) -> dict:
-    """Ritorna le odds per una partita specifica (se disponibili). Usato SOLO dallo scanner/analisi auto."""
+    """Ritorna le odds per una partita specifica (se disponibili)."""
     headers = {"x-apisports-key": API_KEY}
     params = {"fixture": fixture_id, "bookmaker": bookmaker_id}
     try:
@@ -45,12 +45,8 @@ def api_get_odds_by_fixture(fixture_id: int, bookmaker_id: int = PINNACLE_ID) ->
 
 def parse_odds_from_api(odds_block: dict) -> dict:
     """
-    Parser rigido:
-    - SOLO 1X2 principale
-    - SOLO BTTS yes
-    - SOLO Over 2.5 e Under 2.5
-    - scarta quote fuori range
-    - legge l'asian solo come info
+    Parser rigido: 1X2, BTTS, Over/Under 2.5 e una linea asian come hint.
+    Filtra le quote fuori range (tipo over 2.5 a 11).
     """
     result = {
         "odds_1": None,
@@ -600,32 +596,42 @@ def compute_confidence(
     odds_btts: float
 ) -> int:
     score = 100
+
     ent_med = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
     if ent_med > 2.2:
         score -= 15
     elif ent_med > 2.0:
         score -= 5
+
     if abs(spread_ap - spread_co) > 0.25:
         score -= 10
     if abs(total_ap - total_co) > 0.25:
         score -= 8
+
     if not has_xg:
         score -= 8
+
     if not odds_btts or odds_btts <= 1:
         score -= 4
+
     if ris_co["btts"] > 0.7 and (ris_co["p_home"] > 0.65 or ris_co["p_away"] > 0.65):
         score -= 8
+
     return max(0, min(100, score))
 
 # ============================================================
 #                   STREAMLIT APP
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse V6.0", layout="wide")
-st.title("📊 Modello Scommesse V6.0 – manuale + scanner + analisi giornaliera + storico")
+st.set_page_config(page_title="Modello Scommesse V6.1", layout="wide")
+st.title("📊 Modello Scommesse V6.1 – manuale + scanner + storico + cancellazione")
+
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
-# ===== STORICO / PERFORMANCE =====
+# ============================================================
+#               SEZIONE 0: PERFORMANCE & STORICO
+# ============================================================
+
 st.subheader("📁 Stato storico & performance")
 
 if os.path.exists(ARCHIVE_FILE):
@@ -641,21 +647,15 @@ if os.path.exists(ARCHIVE_FILE):
             st.write("🎯 Accuracy: nessun match con risultato reale aggiornato.")
     else:
         st.write("🎯 Accuracy: aggiorna i risultati per vedere la resa reale.")
-
-    if "league" in df_storico.columns:
-        df_lg = df_storico.copy()
-        if "match_ok" in df_lg.columns:
-            df_lg = df_lg[df_lg["match_ok"].isin([0, 1])]
-            if not df_lg.empty:
-                agg = df_lg.groupby("league")["match_ok"].mean().sort_values(ascending=False).head(10)
-                st.write("🏅 Leghe più 'prevedibili' (in base al tuo storico):")
-                st.dataframe(agg)
 else:
     st.info("Nessuno storico ancora. Calcola almeno una partita per popolare il CSV.")
 
 st.markdown("---")
 
-# ===== INPUT MANUALE =====
+# ============================================================
+# 1. INPUT MANUALE
+# ============================================================
+
 match_name = st.text_input("Nome partita (scrivilo come 'SquadraA vs SquadraB')", value="")
 
 st.subheader("1. Linee di apertura (manuali)")
@@ -693,7 +693,7 @@ with col_xg1:
 with col_xg2:
     xg_tot_away = st.text_input("xG totali OSPITE", "")
     xga_tot_away = st.text_input("xGA totali OSPITE", "")
-    partite_away = st.text_input("Partite giocate OSPITE", "")
+    partite_away = st.text_input("Partite giocate OSPITE (es. 10 o 5-3-2)", "")
 
 def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
     if xg_tot_s.strip() == "" or xga_tot_s.strip() == "" or record_s.strip() == "":
@@ -725,7 +725,10 @@ if not has_xg:
 else:
     st.success("Modalità: AVANZATA (spread/total + quote + xG/xGA).")
 
-# ===== CALCOLO MODELLO SINGOLO =====
+# ============================================================
+#                    CALCOLO MODELLO (SINGOLA)
+# ============================================================
+
 if st.button("CALCOLA MODELLO"):
     ris_ap = risultato_completo(
         spread_ap, total_ap,
@@ -798,6 +801,7 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
+    # VALUE FINDER
     st.subheader("💰 Value Finder + EV")
     soglia_pp = 5.0
     rows = []
@@ -975,7 +979,7 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # archivio
+    # salvataggio
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "match": match_name,
@@ -1021,15 +1025,35 @@ if st.button("CALCOLA MODELLO"):
     except Exception as e:
         st.warning(f"Non sono riuscito a salvare l'analisi: {e}")
 
-# ===== ARCHIVIO MOSTRA =====
+# ============================================================
+#           ARCHIVIO + CANCELLAZIONE
+# ============================================================
+
 st.subheader("📁 Archivio storico analisi")
 if os.path.exists(ARCHIVE_FILE):
-    st.dataframe(pd.read_csv(ARCHIVE_FILE).tail(50))
+    df_hist = pd.read_csv(ARCHIVE_FILE)
+    st.dataframe(df_hist.tail(50))
 else:
     st.info("Nessun archivio trovato.")
 
+st.markdown("### 🗑️ Cancella analisi dallo storico")
+if os.path.exists(ARCHIVE_FILE):
+    df_del = pd.read_csv(ARCHIVE_FILE)
+    if not df_del.empty:
+        # aggiungo una label leggibile
+        df_del["label"] = df_del["match"].fillna("Senza nome") + " (" + df_del["match_date"].fillna("??") + ")"
+        to_delete = st.selectbox("Seleziona analisi da eliminare:", df_del["label"].tolist())
+        if st.button("Elimina selezionata"):
+            df_new = df_del[df_del["label"] != to_delete].drop(columns=["label"])
+            df_new.to_csv(ARCHIVE_FILE, index=False)
+            st.success("✅ Analisi eliminata correttamente. Ricarica la pagina per vedere l'archivio aggiornato.")
+    else:
+        st.info("Nessuna analisi salvata da eliminare.")
+else:
+    st.info("Nessun file storico trovato.")
+
 # ============================================================
-#           SCANNER GIORNALIERO (BASE, SOLO API)
+#           SCANNER GIORNALIERO (BASE, SOLO PALINSESTO)
 # ============================================================
 
 st.subheader("🛰️ Scanner giornaliero (base – solo palinsesto)")
@@ -1045,6 +1069,7 @@ if st.button("Scansiona tutte le partite della data"):
         home = f["teams"]["home"]["name"]
         away = f["teams"]["away"]["name"]
         league = f["league"]["name"]
+
         odds_block = api_get_odds_by_fixture(fid, PINNACLE_ID)
         parsed = parse_odds_from_api(odds_block) if odds_block else {}
 
@@ -1053,18 +1078,24 @@ if st.button("Scansiona tutte le partite della data"):
         o2 = parsed.get("odds_2")
         gg = parsed.get("odds_btts")
 
+        # se manca 1X2 salta, ma logga
         if not (o1 and ox and o2):
             rows_scan.append({
                 "Partita": f"{home} vs {away}",
                 "Lega": league,
-                "Note": "Quote 1X2 mancanti",
-                "Affidabilità": 0
+                "1 modello %": None,
+                "X modello %": None,
+                "2 modello %": None,
+                "BTTS %": None,
+                "Over 2.5 %": None,
+                "Affidabilità": 0,
+                "Note": "Quote 1X2 mancanti"
             })
             continue
 
+        # patch: se API non dà spread/total mettiamo i nostri di default
         total_scan = 2.5
-        # PATCH: se spread_hint è None → 0.0
-        spread_scan = parsed.get("spread_hint") or 0.0
+        spread_scan = parsed.get("spread_hint", 0.0)
 
         ris_scan = risultato_completo(
             spread_scan, total_scan,
@@ -1111,11 +1142,12 @@ if st.button("Esegui analisi automatica della giornata"):
     rows_auto = []
 
     for f in fixtures_auto:
+        fid = f["fixture"]["id"]
         home = f["teams"]["home"]["name"]
         away = f["teams"]["away"]["name"]
         league = f["league"]["name"]
 
-        odds_block = api_get_odds_by_fixture(f["fixture"]["id"], PINNACLE_ID)
+        odds_block = api_get_odds_by_fixture(fid, PINNACLE_ID)
         parsed = parse_odds_from_api(odds_block) if odds_block else {}
 
         o1 = parsed.get("odds_1") or 2.0
@@ -1124,8 +1156,7 @@ if st.button("Esegui analisi automatica della giornata"):
         gg = parsed.get("odds_btts") or 0.0
 
         total_auto = 2.5
-        # PATCH qui: se None metti 0.0
-        spread_auto = parsed.get("spread_hint") or 0.0
+        spread_auto = parsed.get("spread_hint", 0.0)
 
         ris_auto = risultato_completo(
             spread_auto, total_auto,
@@ -1154,13 +1185,14 @@ if st.button("Esegui analisi automatica della giornata"):
         })
 
     if rows_auto:
-        df_auto = pd.DataFrame(rows_auto).sort_values(by=["Confidence", "Over2.5%"], ascending=[False, False])
+        df_auto = pd.DataFrame(rows_auto)
+        df_auto = df_auto.sort_values(by=["Confidence", "Over2.5%"], ascending=[False, False])
         st.dataframe(df_auto)
     else:
         st.info("Nessuna partita trovata per questa data.")
 
 # ============================================================
-#           SYNC RISULTATI REALI NELLO STORICO
+#           SYNC RISULTATI REALI
 # ============================================================
 st.subheader("🔄 Aggiorna risultati reali nello storico")
 
