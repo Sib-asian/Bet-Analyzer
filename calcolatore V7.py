@@ -1,6 +1,6 @@
 import math
 from typing import Dict, Any, List, Tuple
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 import pandas as pd
 import os
 import requests
@@ -9,7 +9,7 @@ import streamlit as st
 # ============================================================
 #                 CONFIGURAZIONE API FOOTBALL
 # ============================================================
-API_KEY = "95c43f936816cd4389a747fd2cfe061a"  # la tua key
+API_KEY = "95c43f936816cd4389a747fd2cfe061a"  # tua key
 API_BASE = "https://v3.football.api-sports.io"
 PINNACLE_ID = 11  # Pinnacle
 ARCHIVE_FILE = "storico_analisi.csv"
@@ -19,7 +19,7 @@ ARCHIVE_FILE = "storico_analisi.csv"
 # ============================================================
 
 def api_get_fixtures_by_date(d: str) -> list:
-    """Ritorna la lista dei fixture per una data (YYYY-MM-DD). Usato SOLO dallo scanner."""
+    """Ritorna la lista dei fixture per una data (YYYY-MM-DD). Usato dallo scanner e dal sync risultati."""
     headers = {"x-apisports-key": API_KEY}
     params = {"date": d}
     try:
@@ -31,7 +31,7 @@ def api_get_fixtures_by_date(d: str) -> list:
         return []
 
 def api_get_odds_by_fixture(fixture_id: int, bookmaker_id: int = PINNACLE_ID) -> dict:
-    """Ritorna le odds per una partita specifica (se disponibili). Usato SOLO dallo scanner."""
+    """Ritorna le odds per una partita specifica (se disponibili). Usato SOLO dallo scanner/analisi auto."""
     headers = {"x-apisports-key": API_KEY}
     params = {"fixture": fixture_id, "bookmaker": bookmaker_id}
     try:
@@ -540,7 +540,7 @@ def risultato_completo(spread: float, total: float,
     }
 
 # ============================================================
-#        CHECK DI AFFIDABILITÀ (SOTTO IL COFANO)
+#        CHECK DI AFFIDABILITÀ + CONFIDENCE ENGINE
 # ============================================================
 
 def controlli_affidabilita_base(
@@ -590,28 +590,107 @@ def controlli_affidabilita_base(
 
     return penalty
 
+def compute_confidence(
+    ris_co: dict,
+    spread_ap: float,
+    spread_co: float,
+    total_ap: float,
+    total_co: float,
+    has_xg: bool,
+    odds_btts: float
+) -> int:
+    """
+    Restituisce un punteggio 0-100 di "pulizia" del match.
+    Più alto = partita più leggibile.
+    """
+    score = 100
+
+    # entropia alta = più caos
+    ent_med = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
+    if ent_med > 2.2:
+        score -= 15
+    elif ent_med > 2.0:
+        score -= 5
+
+    # movimenti linee
+    if abs(spread_ap - spread_co) > 0.25:
+        score -= 10
+    if abs(total_ap - total_co) > 0.25:
+        score -= 8
+
+    # xG mancanti
+    if not has_xg:
+        score -= 8
+
+    # BTTS mancante
+    if not odds_btts or odds_btts <= 1:
+        score -= 4
+
+    # sbilanciamenti strani: btts alto + vittoria alta
+    if ris_co["btts"] > 0.7 and (ris_co["p_home"] > 0.65 or ris_co["p_away"] > 0.65):
+        score -= 8
+
+    return max(0, min(100, score))
+
+
 # ============================================================
 #                   STREAMLIT APP
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse V5.6 (manuale + scanner)", layout="wide")
-st.title("📊 Modello Scommesse V5.6 – versione manuale")
+st.set_page_config(page_title="Modello Scommesse V6.0", layout="wide")
+st.title("📊 Modello Scommesse V6.0 – manuale + scanner + analisi giornaliera + storico")
 
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
-# 1. NOME PARTITA
-match_name = st.text_input("Nome partita", value="")
+# ============================================================
+#               SEZIONE 0: PERFORMANCE & STORICO
+# ============================================================
 
-# 1. Linee apertura
-st.subheader("1. Linee di apertura (sempre manuali)")
+st.subheader("📁 Stato storico & performance")
+
+if os.path.exists(ARCHIVE_FILE):
+    df_storico = pd.read_csv(ARCHIVE_FILE)
+    st.write(f"🏦 Partite analizzate totali: **{len(df_storico)}**")
+
+    # accuracy se abbiamo risultati reali
+    if "match_ok" in df_storico.columns and df_storico["match_ok"].notna().any():
+        df_valide = df_storico[df_storico["match_ok"].isin([0, 1])]
+        if len(df_valide) > 0:
+            acc = df_valide["match_ok"].mean() * 100
+            st.write(f"🎯 Accuracy su match con risultato noto: **{acc:.1f}%**")
+        else:
+            st.write("🎯 Accuracy: nessun match con risultato reale aggiornato.")
+    else:
+        st.write("🎯 Accuracy: aggiorna i risultati per vedere la resa reale.")
+
+    # ranking leghe (se c'è)
+    if "league" in df_storico.columns:
+        df_lg = df_storico.copy()
+        if "match_ok" in df_lg.columns:
+            df_lg = df_lg[df_lg["match_ok"].isin([0, 1])]
+            if not df_lg.empty:
+                agg = df_lg.groupby("league")["match_ok"].mean().sort_values(ascending=False).head(10)
+                st.write("🏅 Leghe più 'prevedibili' (in base al tuo storico):")
+                st.dataframe(agg)
+else:
+    st.info("Nessuno storico ancora. Calcola almeno una partita per popolare il CSV.")
+
+st.markdown("---")
+
+# ============================================================
+# 1. INPUT MANUALE (CUORE DEL MODELLO)
+# ============================================================
+
+match_name = st.text_input("Nome partita (scrivilo come 'SquadraA vs SquadraB')", value="")
+
+st.subheader("1. Linee di apertura (manuali)")
 col_ap1, col_ap2 = st.columns(2)
 with col_ap1:
     spread_ap = st.number_input("Spread apertura", value=0.0, step=0.25)
 with col_ap2:
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
 
-# 2. Linee correnti
-st.subheader("2. Linee correnti e quote (spread manuale)")
+st.subheader("2. Linee correnti e quote (manuali)")
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
@@ -623,7 +702,6 @@ with col_co3:
     odds_2 = st.number_input("Quota 2", value=4.50, step=0.01)
     odds_btts = st.number_input("Quota GG (BTTS sì)", value=1.95, step=0.01)
 
-# 2b OU opzionali
 st.subheader("2.b Quote Over/Under (opzionali)")
 col_ou1, col_ou2 = st.columns(2)
 with col_ou1:
@@ -631,11 +709,10 @@ with col_ou1:
 with col_ou2:
     odds_under25 = st.number_input("Quota Under 2.5 (opzionale)", value=0.0, step=0.01)
 
-# 3. xG manuali
 st.subheader("3. xG avanzati (opzionali)")
 col_xg1, col_xg2 = st.columns(2)
 with col_xg1:
-    xg_tot_home = st.text_input("xG totali CASA (da fbref/understat)", "")
+    xg_tot_home = st.text_input("xG totali CASA", "")
     xga_tot_home = st.text_input("xGA totali CASA", "")
     partite_home = st.text_input("Partite giocate CASA (es. 10 o 5-3-2)", "")
 with col_xg2:
@@ -678,7 +755,6 @@ else:
 # ============================================================
 
 if st.button("CALCOLA MODELLO"):
-    # calcolo apertura senza BTTS (spesso non c'è)
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -686,7 +762,6 @@ if st.button("CALCOLA MODELLO"):
         xg_home_for, xg_home_against,
         xg_away_for, xg_away_against
     )
-    # calcolo corrente con tutto
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -695,6 +770,7 @@ if st.button("CALCOLA MODELLO"):
         xg_away_for, xg_away_against
     )
 
+    # affidabilità di base
     aff = 100
     if abs(spread_ap - spread_co) > 0.25:
         aff -= 15
@@ -714,25 +790,29 @@ if st.button("CALCOLA MODELLO"):
         odds_btts,
         odds_over25,
         odds_under25,
-        "",  # nessuna lega qui
-        None # nessuna data qui
+        "",
+        None
     )
     aff -= smart_pen
     aff = max(0, min(100, aff))
 
+    # confidence engine
+    confidence = compute_confidence(
+        ris_co,
+        spread_ap, spread_co,
+        total_ap, total_co,
+        has_xg,
+        odds_btts
+    )
+
     st.success("Calcolo completato ✅")
-
-    delta_spread = spread_co - spread_ap
-    delta_total = total_co - total_ap
-
     st.subheader("⭐ Sintesi Match")
     st.write(f"Affidabilità del match: **{aff}/100**")
-    if aff >= 80:
-        st.success("Partita abbastanza pulita, il modello è più affidabile.")
-    elif aff >= 60:
-        st.info("Partita discreta, qualche movimento o dato incompleto.")
-    else:
-        st.warning("Partita sporca / poco stabile: meglio prudenza o live.")
+    st.write(f"Confidence Engine: **{confidence}/100**")
+
+    # movimento mercato
+    delta_spread = spread_co - spread_ap
+    delta_total = total_co - total_ap
 
     st.subheader("🔁 Movimento di mercato")
     if abs(delta_spread) < 0.01 and abs(delta_total) < 0.01:
@@ -753,6 +833,8 @@ if st.button("CALCOLA MODELLO"):
     st.subheader("💰 Value Finder + EV")
     soglia_pp = 5.0
     rows = []
+    value_markets = []
+
     for lab, p_mod, p_book, odd in [
         ("1", ris_co["p_home"], ris_co["odds_prob"]["1"], odds_1),
         ("X", ris_co["p_draw"], ris_co["odds_prob"]["X"], odds_x),
@@ -760,6 +842,9 @@ if st.button("CALCOLA MODELLO"):
     ]:
         diff = (p_mod - p_book) * 100
         ev = p_mod * odd - 1 if odd and odd > 0 else None
+        is_val = diff >= soglia_pp
+        if is_val:
+            value_markets.append(f"1X2 {lab}")
         rows.append({
             "Mercato": "1X2",
             "Esito": lab,
@@ -767,7 +852,7 @@ if st.button("CALCOLA MODELLO"):
             "Prob quota %": round(p_book*100, 2),
             "Δ pp": round(diff, 2),
             "EV %": round(ev*100, 2) if ev is not None else None,
-            "Value?": "✅" if diff >= soglia_pp else ""
+            "Value?": "✅" if is_val else ""
         })
 
     prob_gg_model = ris_co["btts"]
@@ -775,6 +860,9 @@ if st.button("CALCOLA MODELLO"):
     if prob_gg_book > 0:
         diff_gg = (prob_gg_model - prob_gg_book) * 100
         ev_gg = prob_gg_model * odds_btts - 1
+        is_val = diff_gg >= soglia_pp
+        if is_val:
+            value_markets.append("BTTS Sì")
         rows.append({
             "Mercato": "GG/NG",
             "Esito": "GG",
@@ -782,7 +870,7 @@ if st.button("CALCOLA MODELLO"):
             "Prob quota %": round(prob_gg_book*100, 2),
             "Δ pp": round(diff_gg, 2),
             "EV %": round(ev_gg*100, 2),
-            "Value?": "✅" if diff_gg >= soglia_pp else ""
+            "Value?": "✅" if is_val else ""
         })
     else:
         rows.append({
@@ -802,6 +890,9 @@ if st.button("CALCOLA MODELLO"):
         prob_over_book = decimali_a_prob(odds_over25)
         diff_over = (prob_over_model - prob_over_book) * 100
         ev_over = prob_over_model * odds_over25 - 1
+        is_val = diff_over >= soglia_pp
+        if is_val:
+            value_markets.append("Over 2.5")
         rows.append({
             "Mercato": "Over/Under 2.5",
             "Esito": "Over 2.5",
@@ -809,7 +900,7 @@ if st.button("CALCOLA MODELLO"):
             "Prob quota %": round(prob_over_book*100, 2),
             "Δ pp": round(diff_over, 2),
             "EV %": round(ev_over*100, 2),
-            "Value?": "✅" if diff_over >= soglia_pp else ""
+            "Value?": "✅" if is_val else ""
         })
     else:
         rows.append({
@@ -826,6 +917,9 @@ if st.button("CALCOLA MODELLO"):
         prob_under_book = decimali_a_prob(odds_under25)
         diff_under = (prob_under_model - prob_under_book) * 100
         ev_under = prob_under_model * odds_under25 - 1
+        is_val = diff_under >= soglia_pp
+        if is_val:
+            value_markets.append("Under 2.5")
         rows.append({
             "Mercato": "Over/Under 2.5",
             "Esito": "Under 2.5",
@@ -833,7 +927,7 @@ if st.button("CALCOLA MODELLO"):
             "Prob quota %": round(prob_under_book*100, 2),
             "Δ pp": round(diff_under, 2),
             "EV %": round(ev_under*100, 2),
-            "Value?": "✅" if diff_under >= soglia_pp else ""
+            "Value?": "✅" if is_val else ""
         })
     else:
         rows.append({
@@ -849,7 +943,7 @@ if st.button("CALCOLA MODELLO"):
     df_value = pd.DataFrame(rows)
     st.dataframe(df_value)
 
-    # ================= PAPIRO COMPLETO ===================
+    # PAPIRO
     with st.expander("1️⃣ Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
         st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
@@ -913,10 +1007,12 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # archivio
+    # archivio riga
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "match": match_name,
+        "match_date": date.today().isoformat(),
+        "league": "",  # manuale
         "spread_ap": spread_ap,
         "total_ap": total_ap,
         "spread_co": spread_co,
@@ -934,7 +1030,16 @@ if st.button("CALCOLA MODELLO"):
         "scost_1": round(ris_co["scost"]["1"], 2),
         "scost_x": round(ris_co["scost"]["X"], 2),
         "scost_2": round(ris_co["scost"]["2"], 2),
-        "affidabilita": aff
+        "affidabilita": aff,
+        "confidence": confidence,
+        "esito_modello": max(
+            [("1", ris_co["p_home"]), ("X", ris_co["p_draw"]), ("2", ris_co["p_away"])],
+            key=lambda x: x[1]
+        )[0],
+        "esito_reale": "",
+        "risultato_reale": "",
+        "match_ok": "",
+        "value_markets": "; ".join(value_markets) if value_markets else ""
     }
 
     try:
@@ -948,7 +1053,9 @@ if st.button("CALCOLA MODELLO"):
     except Exception as e:
         st.warning(f"Non sono riuscito a salvare l'analisi: {e}")
 
-# archivio
+# ============================================================
+#           ARCHIVIO MOSTRA
+# ============================================================
 st.subheader("📁 Archivio storico analisi")
 if os.path.exists(ARCHIVE_FILE):
     st.dataframe(pd.read_csv(ARCHIVE_FILE).tail(50))
@@ -959,7 +1066,7 @@ else:
 #           SCANNER GIORNALIERO (BASE, SOLO API)
 # ============================================================
 
-st.subheader("🛰️ Scanner giornaliero (base – solo per dare un’idea)")
+st.subheader("🛰️ Scanner giornaliero (base – solo palinsesto)")
 
 scan_date = st.text_input("Data per lo scanner (YYYY-MM-DD)", value=date.today().strftime("%Y-%m-%d"))
 
@@ -972,7 +1079,6 @@ if st.button("Scansiona tutte le partite della data"):
         home = f["teams"]["home"]["name"]
         away = f["teams"]["away"]["name"]
         league = f["league"]["name"]
-        # odds
         odds_block = api_get_odds_by_fixture(fid, PINNACLE_ID)
         parsed = parse_odds_from_api(odds_block) if odds_block else {}
 
@@ -991,9 +1097,7 @@ if st.button("Scansiona tutte le partite della data"):
             continue
 
         total_scan = 2.5
-        spread_scan = parsed.get("spread_hint")
-        if spread_scan is None:
-            spread_scan = 0.0
+        spread_scan = parsed.get("spread_hint", 0.0)
 
         ris_scan = risultato_completo(
             spread_scan, total_scan,
@@ -1019,10 +1123,124 @@ if st.button("Scansiona tutte le partite della data"):
             "2 modello %": round(ris_scan["p_away"]*100, 1),
             "BTTS %": round(ris_scan["btts"]*100, 1),
             "Over 2.5 %": round(ris_scan["over_25"]*100, 1),
-            "Affidabilità": max(0, aff_scan)
+            "Affidabilità": max(0, aff_scan),
+            "Note": ""
         })
 
     if rows_scan:
         st.dataframe(pd.DataFrame(rows_scan))
     else:
         st.info("Nessuna partita da scansionare per questa data.")
+
+# ============================================================
+#     ANALISI GIORNALIERA AUTOMATICA (SOFT, USO SOLO SCREENING)
+# ============================================================
+st.subheader("🤖 Analisi giornaliera automatica (soft)")
+
+auto_date = st.text_input("Data per analisi automatica (YYYY-MM-DD)", value=date.today().strftime("%Y-%m-%d"), key="auto_date")
+
+if st.button("Esegui analisi automatica della giornata"):
+    fixtures_auto = api_get_fixtures_by_date(auto_date)
+    rows_auto = []
+
+    for f in fixtures_auto:
+        fid = f["fixture"]["id"]
+        home = f["teams"]["home"]["name"]
+        away = f["teams"]["away"]["name"]
+        league = f["league"]["name"]
+
+        odds_block = api_get_odds_by_fixture(fid, PINNACLE_ID)
+        parsed = parse_odds_from_api(odds_block) if odds_block else {}
+
+        o1 = parsed.get("odds_1") or 2.0
+        ox = parsed.get("odds_x") or 3.4
+        o2 = parsed.get("odds_2") or 3.5
+        gg = parsed.get("odds_btts") or 0.0
+
+        total_auto = 2.5
+        spread_auto = parsed.get("spread_hint", 0.0)
+
+        ris_auto = risultato_completo(
+            spread_auto, total_auto,
+            o1, ox, o2,
+            gg,
+            None, None, None, None
+        )
+
+        conf = compute_confidence(
+            ris_auto,
+            spread_auto, spread_auto,
+            total_auto, total_auto,
+            False,
+            gg
+        )
+
+        rows_auto.append({
+            "Partita": f"{home} vs {away}",
+            "Lega": league,
+            "1%": round(ris_auto["p_home"]*100, 1),
+            "X%": round(ris_auto["p_draw"]*100, 1),
+            "2%": round(ris_auto["p_away"]*100, 1),
+            "BTTS%": round(ris_auto["btts"]*100, 1),
+            "Over2.5%": round(ris_auto["over_25"]*100, 1),
+            "Confidence": conf
+        })
+
+    if rows_auto:
+        df_auto = pd.DataFrame(rows_auto)
+        # ordina per confidence e over alto
+        df_auto = df_auto.sort_values(by=["Confidence", "Over2.5%"], ascending=[False, False])
+        st.dataframe(df_auto)
+    else:
+        st.info("Nessuna partita trovata per questa data.")
+
+# ============================================================
+#           SYNC RISULTATI REALI NELLO STORICO
+# ============================================================
+st.subheader("🔄 Aggiorna risultati reali nello storico")
+
+if st.button("Recupera risultati degli ultimi 3 giorni e aggiorna CSV"):
+    if not os.path.exists(ARCHIVE_FILE):
+        st.warning("Non c'è ancora uno storico da aggiornare.")
+    else:
+        df = pd.read_csv(ARCHIVE_FILE)
+        today = date.today()
+        giorni_da_controllare = [(today - timedelta(days=i)).isoformat() for i in range(0, 4)]
+        fixtures_by_day = {}
+        for d in giorni_da_controllare:
+            fixtures_by_day[d] = api_get_fixtures_by_date(d)
+
+        results_map = {}
+        for d, fixtures in fixtures_by_day.items():
+            for f in fixtures:
+                if f["fixture"]["status"]["short"] in ["FT", "AET", "PEN"]:
+                    home = f["teams"]["home"]["name"]
+                    away = f["teams"]["away"]["name"]
+                    key = f"{home} vs {away}".strip().lower()
+                    goals_home = f["goals"]["home"]
+                    goals_away = f["goals"]["away"]
+                    results_map[key] = (goals_home, goals_away)
+
+        updated = 0
+        for idx, row in df.iterrows():
+            key_row = str(row.get("match", "")).strip().lower()
+            if key_row in results_map and (pd.isna(row.get("risultato_reale")) or row.get("risultato_reale") == ""):
+                gh, ga = results_map[key_row]
+                if gh is None or ga is None:
+                    continue
+                if gh > ga:
+                    esito_real = "1"
+                elif gh == ga:
+                    esito_real = "X"
+                else:
+                    esito_real = "2"
+                df.at[idx, "risultato_reale"] = f"{gh}-{ga}"
+                df.at[idx, "esito_reale"] = esito_real
+                pred = row.get("esito_modello", "")
+                if pred != "" and esito_real != "":
+                    df.at[idx, "match_ok"] = 1 if pred == esito_real else 0
+                updated += 1
+
+        df.to_csv(ARCHIVE_FILE, index=False)
+        st.success(f"Aggiornamento completato. Partite aggiornate: {updated}")
+        st.dataframe(df.tail(50))
