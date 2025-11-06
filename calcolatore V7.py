@@ -7,181 +7,36 @@ import requests
 import streamlit as st
 
 # ============================================================
-#           CONFIGURAZIONE PRINCIPALE (V7.0 - THE ODDS API)
+#                CONFIGURAZIONE BASE
 # ============================================================
-
-ODDS_API_KEY = "dd98fa8bb347a59f78867a4fe680e1e8"  # tua key The Odds API
-ODDS_API_BASE = "https://api.the-odds-api.com/v4/sports"
+# tua key di The Odds API
+API_KEY_ODDS = "dd98fa8bb347a59f78867a4fe680e1e8"
 ARCHIVE_FILE = "storico_analisi.csv"
 
-# bookmaker che proviamo a considerare per mediare le quote
-PREFERRED_BOOKS = {
-    "Pinnacle",
-    "Bet365",
-    "Unibet",
-    "10Bet",
-    "Betfair",
-    "William Hill",
-    "Bwin"
+# elenco bookmaker che proviamo a mediare
+PREFERRED_BOOKMAKERS = [
+    "pinnacle",
+    "bet365",
+    "williamhill",
+    "unibet",
+    "ladbrokes",
+    "betfair",
+    "marathonbet",
+]
+
+# mappa nomi campionati -> sport_key di The Odds API
+SPORT_KEYS = {
+    "Serie A": "soccer_italy_serie_a",
+    "Premier League": "soccer_epl",
+    "Liga": "soccer_spain_la_liga",
+    "Bundesliga": "soccer_germany_bundesliga",
+    "Ligue 1": "soccer_france_ligue_one",
+    "Champions League": "soccer_uefa_champs_league",
 }
 
-# sport di default
-DEFAULT_SPORT_KEY = "soccer_italy_serie_a"
-
 # ============================================================
-#                 FUNZIONI API: THE ODDS API
-# ============================================================
-
-def oddsapi_get_sports() -> List[dict]:
-    """Ritorna la lista degli sport disponibili su The Odds API."""
-    try:
-        r = requests.get(
-            f"{ODDS_API_BASE}",
-            params={"apiKey": ODDS_API_KEY},
-            timeout=10
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
-
-def oddsapi_get_odds_for_sport(
-    sport_key: str,
-    regions: str = "eu,uk",
-    markets: str = "h2h,totals,btts",
-    odds_format: str = "decimal"
-) -> List[dict]:
-    """
-    Ritorna le quote per uno sport/lega.
-    Non c'è il filtro per data su The Odds API free, quindi prendiamo il palinsesto attuale/prossimo.
-    """
-    try:
-        r = requests.get(
-            f"{ODDS_API_BASE}/{sport_key}/odds",
-            params={
-                "apiKey": ODDS_API_KEY,
-                "regions": regions,
-                "markets": markets,
-                "oddsFormat": odds_format,
-            },
-            timeout=10
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
-
-def _clean_decimal(value: Any) -> float:
-    try:
-        v = float(value)
-        if v <= 1:
-            return 0.0
-        return v
-    except Exception:
-        return 0.0
-
-def aggregate_odds_from_event(ev: dict) -> dict:
-    """
-    ev è una singola partita restituita da The Odds API.
-    Qui facciamo:
-    - media su più bookmaker (solo quelli scelti)
-    - scartiamo quote sballate su BTTS e Over/Under
-    ritorniamo un dict uniforme come nel modello.
-    """
-    out = {
-        "home": ev.get("home_team", ""),
-        "away": ev.get("away_team", ""),
-        "odds_1": None,
-        "odds_x": None,
-        "odds_2": None,
-        "odds_btts": None,
-        "odds_over25": None,
-        "odds_under25": None,
-        "bookmakers_used": []
-    }
-
-    bms = ev.get("bookmakers", [])
-    if not bms:
-        return out
-
-    # accumulatori
-    h2h_vals_1 = []
-    h2h_vals_x = []
-    h2h_vals_2 = []
-    btts_vals = []
-    over25_vals = []
-    under25_vals = []
-    used_bm_names = []
-
-    for bm in bms:
-        name = bm.get("title", "")
-        if name and name not in PREFERRED_BOOKS:
-            # se vuoi prendere tutti i book, commenta questo continue
-            continue
-        markets = bm.get("markets", [])
-        if not markets:
-            continue
-        used_bm_names.append(name)
-
-        for m in markets:
-            mk = m.get("key", "")
-            outcomes = m.get("outcomes", [])
-            # 1X2
-            if mk == "h2h":
-                # qui spesso ci sono solo 2 outcomes (no pareggio) in alcuni campionati
-                # ma nel calcio di solito 3
-                for o in outcomes:
-                    odd_val = _clean_decimal(o.get("price", 0))
-                    if odd_val == 0.0:
-                        continue
-                    if o.get("name", "").lower() in ["home", out["home"].lower()]:
-                        h2h_vals_1.append(odd_val)
-                    elif o.get("name", "").lower() in ["away", out["away"].lower()]:
-                        h2h_vals_2.append(odd_val)
-                    elif o.get("name", "").lower() in ["draw", "tie", "x"]:
-                        h2h_vals_x.append(odd_val)
-
-            # totals (dobbiamo filtrare over 2.5 e under 2.5)
-            elif mk == "totals":
-                # outcomes: [{"name": "Over", "price": 1.9, "point": 2.5}, ...]
-                for o in outcomes:
-                    point = o.get("point")
-                    name_out = o.get("name", "").lower()
-                    odd_val = _clean_decimal(o.get("price", 0))
-                    if not point or odd_val == 0.0:
-                        continue
-                    # consideriamo solo la linea 2.5
-                    if abs(float(point) - 2.5) < 0.001:
-                        if name_out == "over" and 1.1 <= odd_val <= 3.0:
-                            over25_vals.append(odd_val)
-                        elif name_out == "under" and 1.1 <= odd_val <= 3.0:
-                            under25_vals.append(odd_val)
-
-            # btts (some providers use "btts", some "both_teams_to_score")
-            elif mk in ["btts", "both_teams_to_score"]:
-                for o in outcomes:
-                    name_out = o.get("name", "").lower()
-                    odd_val = _clean_decimal(o.get("price", 0))
-                    # vogliamo solo il "yes"
-                    if name_out in ["yes", "sì", "si"] and 1.1 <= odd_val <= 3.0:
-                        btts_vals.append(odd_val)
-
-    # ora facciamo le medie
-    def _avg(xs: list) -> float:
-        return sum(xs) / len(xs) if xs else 0.0
-
-    out["odds_1"] = _avg(h2h_vals_1) if h2h_vals_1 else None
-    out["odds_x"] = _avg(h2h_vals_x) if h2h_vals_x else None
-    out["odds_2"] = _avg(h2h_vals_2) if h2h_vals_2 else None
-    out["odds_btts"] = _avg(btts_vals) if btts_vals else None
-    out["odds_over25"] = _avg(over25_vals) if over25_vals else None
-    out["odds_under25"] = _avg(under25_vals) if under25_vals else None
-    out["bookmakers_used"] = used_bm_names
-
-    return out
-
-# ============================================================
-#                  FUNZIONI MODELLO (COME V6)
+#                FUNZIONI MODELLO
+# (qui non tocchiamo: è il motore che già funzionava)
 # ============================================================
 
 def poisson_pmf(k: int, lam: float) -> float:
@@ -454,6 +309,7 @@ def risultato_completo(spread: float, total: float,
             w_market=0.6
         )
 
+    # rho guidato da quota GG se c'è
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.8
@@ -582,7 +438,7 @@ def risultato_completo(spread: float, total: float,
     }
 
 # ============================================================
-#        CHECK DI AFFIDABILITÀ + CONFIDENCE ENGINE
+#        CHECK DI AFFIDABILITÀ
 # ============================================================
 
 def controlli_affidabilita_base(
@@ -599,37 +455,20 @@ def controlli_affidabilita_base(
     fixture_datetime: datetime = None,
 ) -> int:
     penalty = 0
-
     if ris_co["btts"] > 0.70 and (ris_co["p_home"] > 0.65 or ris_co["p_away"] > 0.65):
         penalty += 7
-
     if total_co < 2.25 and ris_co["over_25"] > 0.62:
         penalty += 5
-
     if not has_xg:
         penalty += 5
     if not odds_btts or odds_btts <= 1:
         penalty += 4
     if (not odds_over25 or odds_over25 <= 1) and (not odds_under25 or odds_under25 <= 1):
         penalty += 3
-
-    low_scoring = ["serie b", "lige 1", "liga 2", "brazil serie b", "segunda"]
-    if league_name and league_name.lower() in low_scoring:
-        penalty += 3
-
-    if fixture_datetime:
-        now_utc = datetime.now(timezone.utc)
-        diff_days = (fixture_datetime - now_utc).days
-        if diff_days >= 2:
-            penalty += 5
-        elif diff_days == 1:
-            penalty += 2
-
     if abs(spread_ap - spread_co) > 0.25:
         penalty += 5
     if abs(total_ap - total_co) > 0.25:
         penalty += 4
-
     return penalty
 
 def compute_confidence(
@@ -642,191 +481,231 @@ def compute_confidence(
     odds_btts: float
 ) -> int:
     score = 100
-
     ent_med = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
     if ent_med > 2.2:
         score -= 15
     elif ent_med > 2.0:
         score -= 5
-
     if abs(spread_ap - spread_co) > 0.25:
         score -= 10
     if abs(total_ap - total_co) > 0.25:
         score -= 8
-
     if not has_xg:
         score -= 8
-
     if not odds_btts or odds_btts <= 1:
         score -= 4
-
     if ris_co["btts"] > 0.7 and (ris_co["p_home"] > 0.65 or ris_co["p_away"] > 0.65):
         score -= 8
-
     return max(0, min(100, score))
+
+# ============================================================
+#     FUNZIONI API – THE ODDS API (con confronto 5-7 book)
+# ============================================================
+
+def oddsapi_get_events(sport_key: str) -> list:
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+    params = {
+        "apiKey": API_KEY_ODDS,
+        "regions": "eu,uk",
+        "markets": "h2h,totals",
+        "oddsFormat": "decimal"
+    }
+    try:
+        r = requests.get(url, params=params, timeout=15)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        return data
+    except Exception:
+        return []
+
+def oddsapi_extract_avg_odds(event: dict,
+                             wanted_books: List[str]) -> Dict[str, float]:
+    """
+    Prende un singolo evento The Odds API e prova a ricostruire:
+    - quota media 1
+    - quota media X
+    - quota media 2
+    - quota media Over 2.5 / Under 2.5 (se c'è)
+    usando solo i bookmaker in wanted_books se presenti.
+    """
+    out = {
+        "odds_1": None,
+        "odds_x": None,
+        "odds_2": None,
+        "odds_over25": None,
+        "odds_under25": None,
+    }
+
+    bks = event.get("bookmakers", [])
+    if not bks:
+        return out
+
+    home_team = event.get("home_team", "").lower()
+    away_team = event.get("away_team", "").lower()
+
+    list_1 = []
+    list_x = []
+    list_2 = []
+    list_over = []
+    list_under = []
+
+    for bk in bks:
+        bk_key = bk.get("key", "").lower()
+        if bk_key not in wanted_books:
+            continue
+
+        for m in bk.get("markets", []):
+            mkey = m.get("key", "")
+            # 1X2
+            if mkey == "h2h":
+                for o in m.get("outcomes", []):
+                    name = o.get("name", "").lower()
+                    price = float(o.get("price", 0))
+                    if price < 1.05 or price > 15:
+                        continue
+                    if name == home_team:
+                        list_1.append(price)
+                    elif name == away_team:
+                        list_2.append(price)
+                    elif name in ["draw", "pareggio"]:
+                        list_x.append(price)
+
+            # totals
+            elif mkey == "totals":
+                point = m.get("point", None)
+                # se è 2.5 ci interessa
+                if point is not None and abs(float(point) - 2.5) < 0.001:
+                    for o in m.get("outcomes", []):
+                        desc = o.get("name", "").lower()
+                        price = float(o.get("price", 0))
+                        if price < 1.05 or price > 15:
+                            continue
+                        if "over" in desc:
+                            list_over.append(price)
+                        elif "under" in desc:
+                            list_under.append(price)
+
+    def avg_or_none(arr):
+        return round(sum(arr)/len(arr), 2) if arr else None
+
+    out["odds_1"] = avg_or_none(list_1)
+    out["odds_x"] = avg_or_none(list_x)
+    out["odds_2"] = avg_or_none(list_2)
+    out["odds_over25"] = avg_or_none(list_over)
+    out["odds_under25"] = avg_or_none(list_under)
+
+    return out
 
 # ============================================================
 #                   STREAMLIT APP
 # ============================================================
 
-st.set_page_config(page_title="Modello Scommesse V7.0 – The Odds API", layout="wide")
-st.title("📊 Modello Scommesse V7.0 – Manuale + The Odds API + Scanner")
+# stato
+if "events" not in st.session_state:
+    st.session_state.events = []
+if "selected_event_key" not in st.session_state:
+    st.session_state.selected_event_key = None
+if "odds_from_api" not in st.session_state:
+    st.session_state.odds_from_api = {}
 
-st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
+st.subheader("0. Carica partite da The Odds API")
+col_s0, col_s1 = st.columns([2,1])
+with col_s0:
+    league_label = st.selectbox("Campionato", list(SPORT_KEYS.keys()), index=0)
+with col_s1:
+    if st.button("📡 Carica partite"):
+        sport_key = SPORT_KEYS[league_label]
+        evs = oddsapi_get_events(sport_key)
+        st.session_state.events = evs
+        st.session_state.selected_event_key = None
+        if not evs:
+            st.warning("Nessuna partita trovata oppure limite API.")
+        else:
+            st.success(f"Trovate {len(evs)} partite")
 
-# session init
-if "selected_event_id" not in st.session_state:
-    st.session_state.selected_event_id = None
-if "api_events" not in st.session_state:
-    st.session_state.api_events = []
-if "selected_sport_key" not in st.session_state:
-    st.session_state.selected_sport_key = DEFAULT_SPORT_KEY
+events = st.session_state.events
 
-# ============================================================
-#               SEZIONE 0: STORICO & PERFORMANCE
-# ============================================================
-
-st.subheader("📁 Storico & performance")
-
-if os.path.exists(ARCHIVE_FILE):
-    df_st = pd.read_csv(ARCHIVE_FILE)
-    st.write(f"📦 Partite salvate: **{len(df_st)}**")
-    if "match_ok" in df_st.columns and df_st["match_ok"].notna().any():
-        df_val = df_st[df_st["match_ok"].isin([0, 1])]
-        if len(df_val) > 0:
-            acc = df_val["match_ok"].mean() * 100
-            st.write(f"🎯 Accuracy (partite aggiornate): **{acc:.1f}%**")
-else:
-    st.info("Nessuno storico ancora. Calcola una partita per popolare il CSV.")
-
-st.markdown("---")
-
-# ============================================================
-#       SEZIONE API – SCELTA LEGA (THE ODDS API)
-# ============================================================
-
-st.subheader("0. Seleziona lega/sport da The Odds API")
-
-sports_list = oddsapi_get_sports()
-# filtriamo solo soccer per non fare casino
-soccer_sports = [s for s in sports_list if s.get("group", "").lower().startswith("soccer")]
-
-if soccer_sports:
-    # facciamo un dict nome → key
-    sport_labels = {f"{s.get('details','')} ({s.get('title','')})": s.get("key") for s in soccer_sports}
-    # se il default esiste, lo mettiamo
-    keys_list = list(sport_labels.keys())
-    if st.session_state.selected_sport_key in sport_labels.values():
-        # troviamo la label
-        default_index = keys_list.index(
-            [lbl for lbl, key in sport_labels.items() if key == st.session_state.selected_sport_key][0]
-        )
-    else:
-        default_index = 0
-    selected_sport_label = st.selectbox("Scegli una lega calcio", keys_list, index=default_index)
-    selected_sport_key = sport_labels[selected_sport_label]
-    st.session_state.selected_sport_key = selected_sport_key
-else:
-    st.warning("Non sono riuscito a caricare la lista delle leghe da The Odds API. Uso Serie A di default.")
-    selected_sport_key = DEFAULT_SPORT_KEY
-    st.session_state.selected_sport_key = selected_sport_key
-
-if st.button("🔎 Carica partite da The Odds API"):
-    events = oddsapi_get_odds_for_sport(selected_sport_key)
-    st.session_state.api_events = events
-
-events = st.session_state.api_events
-
-# mappiamo gli eventi in un dict "id fittizio" → evento
+event_options = []
 event_map = {}
 if events:
-    for i, ev in enumerate(events):
-        home = ev.get("home_team", "Home")
-        away = ev.get("away_team", "Away")
-        # a volte l'API non dà un id proprio come la tua vecchia API, quindi usiamo l'indice
-        event_map[f"{i} - {home} vs {away}"] = i
+    for idx, ev in enumerate(events):
+        key = f"{ev['home_team']} vs {ev['away_team']}"
+        event_options.append(key)
+        event_map[key] = ev
 
-if event_map:
-    options = list(event_map.keys())
-    # proviamo a mantenere la selezione
-    if st.session_state.selected_event_id is not None:
-        try:
-            default_idx = options.index(st.session_state.selected_event_id)
-        except ValueError:
-            default_idx = 0
-    else:
-        default_idx = 0
-    selected_event_label = st.selectbox("Partite trovate (API)", options, index=default_idx)
-    st.session_state.selected_event_id = selected_event_label
+if event_options:
+    default_index = 0
+    if st.session_state.selected_event_key in event_options:
+        default_index = event_options.index(st.session_state.selected_event_key)
+    selected_key = st.selectbox("Partita trovata:", event_options, index=default_index)
+    st.session_state.selected_event_key = selected_key
+
+    ev = event_map[selected_key]
+    parsed_odds = oddsapi_extract_avg_odds(ev, PREFERRED_BOOKMAKERS)
+    st.session_state.odds_from_api = parsed_odds
+
+    st.info(f"Partita selezionata: **{selected_key}** (media su {len(PREFERRED_BOOKMAKERS)} book)")
+    st.write("Quote trovate (solo se il book le aveva):")
+    st.json(parsed_odds)
 else:
-    selected_event_label = None
+    parsed_odds = {}
+
+st.markdown("---")
 
 # ============================================================
 # 1. INPUT MANUALE (CUORE DEL MODELLO)
 # ============================================================
 
-match_name_default = ""
-parsed_from_api = {}
-if selected_event_label and events:
-    ev_idx = event_map[selected_event_label]
-    ev = events[ev_idx]
-    parsed_from_api = aggregate_odds_from_event(ev)
-    match_name_default = f"{parsed_from_api.get('home','')} vs {parsed_from_api.get('away','')}"
+st.subheader("1. Dati partita (manuali + auto)")
 
-st.subheader("1. Inserisci la partita (manuale, sempre disponibile)")
-match_name = st.text_input("Nome partita", value=match_name_default)
+match_name = st.text_input("Nome partita", value=st.session_state.selected_event_key or "")
 
-st.subheader("1.a Linee di apertura (manuali)")
 col_ap1, col_ap2 = st.columns(2)
 with col_ap1:
     spread_ap = st.number_input("Spread apertura", value=0.0, step=0.25)
 with col_ap2:
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
 
-st.subheader("1.b Linee correnti e quote (manuali, con precompilazione da API se trovata)")
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
     odds_1 = st.number_input(
         "Quota 1",
-        value=parsed_from_api["odds_1"] if parsed_from_api.get("odds_1") else 1.80,
+        value=parsed_odds.get("odds_1") or st.session_state.odds_from_api.get("odds_1") or 1.80,
         step=0.01
     )
 with col_co2:
     total_co = st.number_input("Total corrente", value=2.5, step=0.25)
     odds_x = st.number_input(
         "Quota X",
-        value=parsed_from_api["odds_x"] if parsed_from_api.get("odds_x") else 3.50,
+        value=parsed_odds.get("odds_x") or st.session_state.odds_from_api.get("odds_x") or 3.50,
         step=0.01
     )
 with col_co3:
     odds_2 = st.number_input(
         "Quota 2",
-        value=parsed_from_api["odds_2"] if parsed_from_api.get("odds_2") else 4.50,
+        value=parsed_odds.get("odds_2") or st.session_state.odds_from_api.get("odds_2") or 4.50,
         step=0.01
     )
-    odds_btts = st.number_input(
-        "Quota GG (BTTS sì)",
-        value=parsed_from_api["odds_btts"] if parsed_from_api.get("odds_btts") else 1.95,
-        step=0.01
-    )
+    odds_btts = st.number_input("Quota GG (BTTS sì)", value=1.95, step=0.01)
 
-st.subheader("1.c Quote Over/Under (opzionali, ma le mostriamo)")
+st.subheader("2. Quote Over/Under (opzionali)")
 col_ou1, col_ou2 = st.columns(2)
 with col_ou1:
     odds_over25 = st.number_input(
         "Quota Over 2.5 (opzionale)",
-        value=parsed_from_api["odds_over25"] if parsed_from_api.get("odds_over25") else 0.0,
+        value=parsed_odds.get("odds_over25") or 0.0,
         step=0.01
     )
 with col_ou2:
     odds_under25 = st.number_input(
         "Quota Under 2.5 (opzionale)",
-        value=parsed_from_api["odds_under25"] if parsed_from_api.get("odds_under25") else 0.0,
+        value=parsed_odds.get("odds_under25") or 0.0,
         step=0.01
     )
 
-st.subheader("2. xG avanzati (opzionali)")
+st.subheader("3. xG avanzati (opzionali)")
 col_xg1, col_xg2 = st.columns(2)
 with col_xg1:
     xg_tot_home = st.text_input("xG totali CASA", "")
@@ -863,12 +742,12 @@ has_xg = not (
 )
 
 if not has_xg:
-    st.info("Modalità: BASE (spread/total/quote). Se inserisci xG e xGA passa in modalità AVANZATA.")
+    st.info("Modalità: BASE (solo spread/total/quote).")
 else:
-    st.success("Modalità: AVANZATA (spread + total + quote + xG/xGA).")
+    st.success("Modalità: AVANZATA (spread/total + quote + xG/xGA).")
 
 # ============================================================
-#                    CALCOLO MODELLO (SINGOLA)
+#                    CALCOLO MODELLO
 # ============================================================
 
 if st.button("CALCOLA MODELLO"):
@@ -921,28 +800,9 @@ if st.button("CALCOLA MODELLO"):
     )
 
     st.success("Calcolo completato ✅")
-
     st.subheader("⭐ Sintesi Match")
     st.write(f"Affidabilità del match: **{aff}/100**")
     st.write(f"Confidence Engine: **{confidence}/100**")
-
-    delta_spread = spread_co - spread_ap
-    delta_total = total_co - total_ap
-
-    st.subheader("🔁 Movimento di mercato")
-    if abs(delta_spread) < 0.01 and abs(delta_total) < 0.01:
-        st.write("Linee stabili: nessun movimento importante.")
-    else:
-        if abs(delta_spread) >= 0.01:
-            if delta_spread < 0:
-                st.write(f"- Spread sceso di {abs(delta_spread):.2f} → mercato più pro CASA")
-            else:
-                st.write(f"- Spread salito di {abs(delta_spread):.2f} → mercato più pro TRASFERTA")
-        if abs(delta_total) >= 0.01:
-            if delta_total > 0:
-                st.write(f"- Total salito di {delta_total:.2f} → mercato si aspetta più gol")
-            else:
-                st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
     # VALUE FINDER
     st.subheader("💰 Value Finder + EV")
@@ -1058,7 +918,7 @@ if st.button("CALCOLA MODELLO"):
     df_value = pd.DataFrame(rows)
     st.dataframe(df_value)
 
-    # PAPIRO DETTAGLIATO
+    # PAPIRO COMPLETO
     with st.expander("1️⃣ Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
         st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
@@ -1106,7 +966,7 @@ if st.button("CALCOLA MODELLO"):
         st.write(f"Vittoria casa almeno 2 gol scarto: {ris_co['marg2']*100:.1f}%")
         st.write(f"Vittoria casa almeno 3 gol scarto: {ris_co['marg3']*100:.1f}%")
 
-    with st.expander("9️⃣ Combo mercati (1&Over, DC+GG, ecc.)"):
+    with st.expander("9️⃣ Combo mercati"):
         for k, v in ris_co["combo_book"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
@@ -1122,12 +982,11 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # archivio
+    # salvataggio storico
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "match": match_name,
         "match_date": date.today().isoformat(),
-        "league": st.session_state.selected_sport_key,
         "spread_ap": spread_ap,
         "total_ap": total_ap,
         "spread_co": spread_co,
@@ -1146,15 +1005,7 @@ if st.button("CALCOLA MODELLO"):
         "scost_x": round(ris_co["scost"]["X"], 2),
         "scost_2": round(ris_co["scost"]["2"], 2),
         "affidabilita": aff,
-        "confidence": confidence,
-        "esito_modello": max(
-            [("1", ris_co["p_home"]), ("X", ris_co["p_draw"]), ("2", ris_co["p_away"])],
-            key=lambda x: x[1]
-        )[0],
-        "esito_reale": "",
-        "risultato_reale": "",
-        "match_ok": "",
-        "value_markets": "; ".join(value_markets) if value_markets else ""
+        "confidence": confidence
     }
 
     try:
@@ -1169,126 +1020,11 @@ if st.button("CALCOLA MODELLO"):
         st.warning(f"Non sono riuscito a salvare l'analisi: {e}")
 
 # ============================================================
-#           ARCHIVIO MOSTRA + CANCELLAZIONE RIGA
+#           ARCHIVIO MOSTRA
 # ============================================================
+
 st.subheader("📁 Archivio storico analisi")
 if os.path.exists(ARCHIVE_FILE):
-    df_arch = pd.read_csv(ARCHIVE_FILE)
-    st.dataframe(df_arch.tail(50))
-
-    st.markdown("### 🗑️ Cancella riga dallo storico")
-    if len(df_arch) > 0:
-        idx_to_del = st.number_input("Indice riga da cancellare (guarda la tabella sopra)", min_value=0, max_value=len(df_arch)-1, value=len(df_arch)-1, step=1)
-        if st.button("Cancella questa riga dallo storico"):
-            df_arch = df_arch.drop(index=idx_to_del).reset_index(drop=True)
-            df_arch.to_csv(ARCHIVE_FILE, index=False)
-            st.success("Riga cancellata. Ricarica la pagina per vedere l'effetto.")
+    st.dataframe(pd.read_csv(ARCHIVE_FILE).tail(50))
 else:
     st.info("Nessun archivio trovato.")
-
-# ============================================================
-#           SCANNER GIORNALIERO (BASATO SU THE ODDS API)
-# ============================================================
-
-st.subheader("🛰️ Scanner giornaliero (The Odds API)")
-
-if st.button("Scansiona le partite del campionato selezionato"):
-    scan_events = oddsapi_get_odds_for_sport(st.session_state.selected_sport_key)
-    rows_scan = []
-    for ev in scan_events:
-        parsed = aggregate_odds_from_event(ev)
-        home = parsed.get("home", "Home")
-        away = parsed.get("away", "Away")
-        o1 = parsed.get("odds_1")
-        ox = parsed.get("odds_x")
-        o2 = parsed.get("odds_2")
-        gg = parsed.get("odds_btts")
-
-        # se manca 1X2, segna come incompleto
-        if not (o1 and o2):
-            rows_scan.append({
-                "Partita": f"{home} vs {away}",
-                "1%": "",
-                "X%": "",
-                "2%": "",
-                "BTTS%": "",
-                "Over2.5%": "",
-                "Note": "1X2 incompleto"
-            })
-            continue
-
-        # calcolo rapido
-        base_total = 2.5
-        base_spread = 0.0
-        ris_scan = risultato_completo(
-            base_spread, base_total,
-            o1, ox if ox else 3.4, o2,
-            gg if gg else 0.0,
-            None, None, None, None
-        )
-
-        rows_scan.append({
-            "Partita": f"{home} vs {away}",
-            "1%": round(ris_scan["p_home"]*100, 1),
-            "X%": round(ris_scan["p_draw"]*100, 1),
-            "2%": round(ris_scan["p_away"]*100, 1),
-            "BTTS%": round(ris_scan["btts"]*100, 1),
-            "Over2.5%": round(ris_scan["over_25"]*100, 1),
-            "Note": ", ".join(parsed.get("bookmakers_used", []))
-        })
-
-    if rows_scan:
-        st.dataframe(pd.DataFrame(rows_scan))
-    else:
-        st.info("Nessuna partita trovata per questa lega.")
-
-# ============================================================
-#     ANALISI GIORNALIERA AUTOMATICA (SOFT)
-# ============================================================
-
-st.subheader("🤖 Analisi automatica (soft) sulla lega selezionata")
-
-if st.button("Esegui analisi automatica"):
-    auto_events = oddsapi_get_odds_for_sport(st.session_state.selected_sport_key)
-    rows_auto = []
-    for ev in auto_events:
-        parsed = aggregate_odds_from_event(ev)
-        home = parsed.get("home", "Home")
-        away = parsed.get("away", "Away")
-        o1 = parsed.get("odds_1") or 2.0
-        ox = parsed.get("odds_x") or 3.4
-        o2 = parsed.get("odds_2") or 3.5
-        gg = parsed.get("odds_btts") or 0.0
-
-        ris_auto = risultato_completo(
-            0.0, 2.5,
-            o1, ox, o2,
-            gg,
-            None, None, None, None
-        )
-
-        conf = compute_confidence(
-            ris_auto,
-            0.0, 0.0,
-            2.5, 2.5,
-            False,
-            gg
-        )
-
-        rows_auto.append({
-            "Partita": f"{home} vs {away}",
-            "1%": round(ris_auto["p_home"]*100, 1),
-            "X%": round(ris_auto["p_draw"]*100, 1),
-            "2%": round(ris_auto["p_away"]*100, 1),
-            "BTTS%": round(ris_auto["btts"]*100, 1),
-            "Over2.5%": round(ris_auto["over_25"]*100, 1),
-            "Confidence": conf,
-            "Book presi": ", ".join(parsed.get("bookmakers_used", []))
-        })
-
-    if rows_auto:
-        df_auto = pd.DataFrame(rows_auto)
-        df_auto = df_auto.sort_values(by=["Confidence", "Over2.5%"], ascending=[False, False])
-        st.dataframe(df_auto)
-    else:
-        st.info("Nessuna partita trovata.")
