@@ -53,7 +53,7 @@ def oddsapi_get_soccer_leagues() -> List[dict]:
 def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
     """
     Prende gli eventi per una lega di calcio.
-    markets: h2h, totals, spreads, both_teams_to_score → per avere 1X2, over/under, DNB e GG.
+    markets: h2h, totals, spreads → per avere 1X2, over/under e DNB (da spread 0).
     """
     try:
         r = requests.get(
@@ -61,8 +61,7 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
             params={
                 "apiKey": THE_ODDS_API_KEY,
                 "regions": "eu,uk",
-                # 👇 aggiunto BTTS
-                "markets": "h2h,totals,spreads,both_teams_to_score",
+                "markets": "h2h,totals,spreads",
                 "oddsFormat": "decimal",
                 "dateFormat": "iso",
             },
@@ -81,7 +80,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media 1X2
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta ricavati dallo spread 0
-    - BTTS sì / no (se disponibili)
     """
     out = {
         "home": event.get("home_team"),
@@ -93,9 +91,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
         "odds_under25": None,
         "odds_dnb_home": None,
         "odds_dnb_away": None,
-        # 👇 nuovi
-        "odds_btts_yes": None,
-        "odds_btts_no": None,
     }
 
     bookmakers = event.get("bookmakers", [])
@@ -106,7 +101,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
     h2h_home, h2h_draw, h2h_away = [], [], []
     over25_list, under25_list = [], []
     dnb_home_list, dnb_away_list = [], []
-    btts_yes_list, btts_no_list = [], []
 
     for bk in bookmakers:
         bk_key = bk.get("key")
@@ -156,18 +150,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif name == out["away"]:
                             dnb_away_list.append(price)
 
-            # 👇 both teams to score (GG / BTTS)
-            elif mk_key == "both_teams_to_score":
-                for o in mk.get("outcomes", []):
-                    name = o.get("name", "").lower()
-                    price = o.get("price")
-                    if not price:
-                        continue
-                    if "yes" in name:
-                        btts_yes_list.append(price)
-                    elif "no" in name:
-                        btts_no_list.append(price)
-
     # medie
     if h2h_home:
         out["odds_1"] = sum(h2h_home) / len(h2h_home)
@@ -183,10 +165,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
         out["odds_dnb_home"] = sum(dnb_home_list) / len(dnb_home_list)
     if dnb_away_list:
         out["odds_dnb_away"] = sum(dnb_away_list) / len(dnb_away_list)
-    if btts_yes_list:
-        out["odds_btts_yes"] = sum(btts_yes_list) / len(btts_yes_list)
-    if btts_no_list:
-        out["odds_btts_no"] = sum(btts_no_list) / len(btts_no_list)
 
     return out
 
@@ -650,10 +628,12 @@ def check_coerenza_quote(
 
     # over/under
     if odds_over25 and odds_under25:
+        # le due inverse dovrebbero sommare > 1.9 circa
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
         if (p_over + p_under) < 1.7:
             warnings.append("Mercato over/under 2.5 non sembra calibrato (somma prob < 170%).")
+        # se 1X2 è molto sbilanciato ma over/under è alto
         if odds_1 and odds_1 < 1.5 and odds_over25 and odds_over25 > 2.2:
             warnings.append("Favorita netta ma over 2.5 alto → controlla linea gol.")
     else:
@@ -672,15 +652,21 @@ def compute_market_pressure_index(
 ) -> int:
     """
     0–100: più alto = mercato pulito e direzionale.
+    È una cosa semplice basata su:
+    - favorito chiaro
+    - dnb che conferma
+    - over/under allineato
     """
     score = 50  # base
 
+    # favorito chiaro
     if odds_1 and odds_2:
         if odds_1 < 1.7 and odds_2 > 3.5:
             score += 20
         elif odds_1 < 2.0 and odds_2 > 3.0:
             score += 10
 
+    # dnb che conferma
     if odds_dnb_home and odds_dnb_home > 1:
         if odds_1 and odds_1 < 2.0 and odds_dnb_home < 1.5:
             score += 10
@@ -688,6 +674,7 @@ def compute_market_pressure_index(
         if odds_2 and odds_2 < 2.0 and odds_dnb_away < 1.5:
             score += 10
 
+    # over/under ragionevoli
     if odds_over25 and odds_under25:
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
@@ -705,9 +692,12 @@ def compute_global_confidence(
     mpi: int,
     has_xg: bool,
 ) -> int:
+    """
+    mix: affidabilità tua, penalità per warning, bonus per market pressure, bonus se hai xG
+    """
     conf = base_aff
     conf -= n_warnings * 5
-    conf += int((mpi - 50) * 0.3)
+    conf += int((mpi - 50) * 0.3)  # se mpi > 50 aggiunge, se < 50 toglie
     if has_xg:
         conf += 5
     return max(0, min(100, conf))
@@ -845,12 +835,7 @@ with col_co2:
     odds_x = st.number_input("Quota X", value=float(api_prices.get("odds_x") or 3.50), step=0.01)
 with col_co3:
     odds_2 = st.number_input("Quota 2", value=float(api_prices.get("odds_2") or 4.50), step=0.01)
-    # 👇 ora si precompila dal book se c’è
-    odds_btts = st.number_input(
-        "Quota GG (BTTS sì) – se ce l’hai",
-        value=float(api_prices.get("odds_btts_yes") or 1.95),
-        step=0.01
-    )
+    odds_btts = st.number_input("Quota GG (BTTS sì) – se ce l’hai", value=1.95, step=0.01)
 
 # DNB precompilati
 st.subheader("3.b DNB (Draw No Bet) – letti dallo spread 0 se disponibili")
@@ -939,7 +924,7 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
-    # affidabilità semplice
+    # affidabilità semplice (quella che avevi)
     aff = 100
     if abs(spread_ap - spread_co) > 0.25:
         aff -= 15
@@ -952,17 +937,20 @@ if st.button("CALCOLA MODELLO"):
         aff -= 10
     aff = max(0, min(100, aff))
 
+    # 1) check coerenza quote
     warnings = check_coerenza_quote(
         odds_1, odds_x, odds_2,
         odds_over25, odds_under25
     )
 
+    # 2) market pressure index
     mpi = compute_market_pressure_index(
         odds_1, odds_x, odds_2,
         odds_over25, odds_under25,
         odds_dnb_home, odds_dnb_away
     )
 
+    # 3) confidence globale
     global_conf = compute_global_confidence(
         base_aff=aff,
         n_warnings=len(warnings),
@@ -984,6 +972,7 @@ if st.button("CALCOLA MODELLO"):
         st.subheader("✅ Check coerenza quote")
         st.write("Quote coerenti con il modello minimo.")
 
+    # movimento
     delta_spread = spread_co - spread_ap
     delta_total = total_co - total_ap
 
@@ -1002,6 +991,7 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
+    # value finder
     st.subheader("💰 Value Finder")
     rows = []
     for lab, p_mod, odd in [
@@ -1045,6 +1035,7 @@ if st.button("CALCOLA MODELLO"):
 
     st.dataframe(pd.DataFrame(rows))
 
+    # espansioni come nel “papiro”
     with st.expander("1️⃣ Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
         st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
