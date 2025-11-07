@@ -52,25 +52,49 @@ def oddsapi_get_soccer_leagues() -> List[dict]:
 
 def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
     """
-    Prende gli eventi per una lega di calcio.
-    markets: h2h, totals, spreads, btts → per avere 1X2, over/under, DNB e GG.
+    Prova a prendere gli eventi con anche il mercato BTTS.
+    Se la lega non lo supporta e la risposta è vuota, riprova senza BTTS.
     """
+    base_url = f"{THE_ODDS_BASE}/sports/{league_key}/odds"
+
+    params_common = {
+        "apiKey": THE_ODDS_API_KEY,
+        "regions": "eu,uk",
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
+
+    # 1) prova con btts
     try:
         r = requests.get(
-            f"{THE_ODDS_BASE}/sports/{league_key}/odds",
+            base_url,
             params={
-                "apiKey": THE_ODDS_API_KEY,
-                "regions": "eu,uk",
+                **params_common,
                 "markets": "h2h,totals,spreads,btts",
-                "oddsFormat": "decimal",
-                "dateFormat": "iso",
             },
             timeout=8,
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        if data:
+            return data
     except Exception as e:
-        print("errore events:", e)
+        print("errore events (con btts):", e)
+
+    # 2) fallback senza btts
+    try:
+        r2 = requests.get(
+            base_url,
+            params={
+                **params_common,
+                "markets": "h2h,totals,spreads",
+            },
+            timeout=8,
+        )
+        r2.raise_for_status()
+        return r2.json()
+    except Exception as e:
+        print("errore events (senza btts):", e)
         return []
 
 
@@ -80,7 +104,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media 1X2
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta ricavati dallo spread 0
-    - quota GG (BTTS yes)
+    - quota GG (BTTS yes) se presente
     """
     out = {
         "home": event.get("home_team"),
@@ -111,7 +135,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
             continue
 
         for mk in bk.get("markets", []):
-            mk_key = mk.get("key")
+            mk_key = mk.get("key", "").lower()
 
             # 1X2
             if mk_key == "h2h":
@@ -153,14 +177,13 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif name == out["away"]:
                             dnb_away_list.append(price)
 
-            # BTTS / entrambe segnano
-            elif mk_key in ("btts", "both_teams_to_score"):
+            # BTTS / entrambe segnano (usiamo un match più elastico)
+            elif "btts" in mk_key or "both_teams_to_score" in mk_key:
                 for o in mk.get("outcomes", []):
                     name = o.get("name", "").lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    # di solito "Yes"
                     if "yes" in name or "sì" in name or "si" in name:
                         btts_list.append(price)
 
@@ -262,8 +285,10 @@ def max_goals_adattivo(lh: float, la: float) -> int:
     return max(8, int((lh + la) * 2.5))
 
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
+    # aggiunto piccolo clamp per evitare valori negativi in 0-0
     if h == 0 and a == 0:
-        return 1 - (lh * la * rho)
+        val = 1 - (lh * la * rho)
+        return max(0.2, val)
     elif h == 0 and a == 1:
         return 1 + (lh * rho)
     elif h == 1 and a == 0:
@@ -727,10 +752,10 @@ def compute_structure_affidability(
     aff -= int(diff_spread / 0.25) * 8
     aff -= int(diff_total / 0.25) * 5
 
-    # entropia alta → match sporco
-    if ent_media > 2.25:
+    # entropia alta → match sporco, ma solo se non è una partita da under durissimo
+    if ent_media > 2.25 and total_co >= 2.0:
         aff -= 15
-    elif ent_media > 2.10:
+    elif ent_media > 2.10 and total_co >= 2.0:
         aff -= 8
 
     # niente xG → un po' meno affidabile
@@ -895,7 +920,6 @@ with col_co2:
     odds_x = st.number_input("Quota X", value=float(api_prices.get("odds_x") or 3.50), step=0.01)
 with col_co3:
     odds_2 = st.number_input("Quota 2", value=float(api_prices.get("odds_2") or 4.50), step=0.01)
-    # GG ora precompilato dall’API se c’è
     odds_btts = st.number_input(
         "Quota GG (BTTS sì)",
         value=float(api_prices.get("odds_btts") or 1.95),
@@ -1103,7 +1127,7 @@ if st.button("CALCOLA MODELLO"):
                 "Δ pp": round(diff, 2),
             })
 
-    # GG (BTTS) – ora arriva già dall’API
+    # GG (BTTS)
     if odds_btts and odds_btts > 1:
         p_mod = ris_co["btts"]
         p_book = decimali_a_prob(odds_btts)
