@@ -1195,7 +1195,10 @@ if st.button("CALCOLA MODELLO"):
             "Δ pp": round(diff, 2),
         })
 
-    st.dataframe(pd.DataFrame(rows))
+    df_vf = pd.DataFrame(rows)
+df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ +2 punti %
+st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
+
 
     # espansioni
     with st.expander("1️⃣ Probabilità principali"):
