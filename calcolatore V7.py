@@ -62,7 +62,6 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
             f"{THE_ODDS_BASE}/sports/{league_key}/odds",
             params={
                 "apiKey": THE_ODDS_API_KEY,
-                # allarghiamo le regioni per avere più chance
                 "regions": "us,us2,eu,uk",
                 "markets": "h2h,totals,spreads,both_teams_to_score",
                 "oddsFormat": "decimal",
@@ -99,7 +98,6 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
                     "home_team": ev.get("home_team"),
                     "away_team": ev.get("away_team"),
                     "commence_time": ev.get("commence_time"),
-                    # niente quote, le metterai tu a mano
                     "bookmakers": [],
                 })
         return events_norm
@@ -747,96 +745,6 @@ def compute_global_confidence(
     return max(0, min(100, conf))
 
 # ============================================================
-#     FUNZIONE NUOVA: SCANSIONA TUTTA LA LEGA E FILTRA
-# ============================================================
-
-def scan_league_and_filter(events: List[dict],
-                           soglia_btts: float,
-                           soglia_over25: float,
-                           soglia_conf: int) -> pd.DataFrame:
-    """
-    events: lista eventi già presa da oddsapi_get_events_for_league
-    restituisce un dataframe con solo le partite che superano almeno uno dei filtri
-    """
-    rows = []
-    for ev in events:
-        prices = oddsapi_extract_prices(ev)
-        home = prices.get("home")
-        away = prices.get("away")
-
-        # se mancano le quote base salta
-        if not prices.get("odds_1") or not prices.get("odds_2"):
-            continue
-
-        # uso il modello con spread=0 e total=2.5 perché l'API non ci dà la linea esatta
-        res = risultato_completo(
-            spread=0.0,
-            total=2.5,
-            odds_1=prices.get("odds_1") or 0.0,
-            odds_x=prices.get("odds_x") or 10.0,
-            odds_2=prices.get("odds_2") or 0.0,
-            odds_btts_yes=prices.get("odds_btts_yes") or None,
-            xg_for_home=None,
-            xg_against_home=None,
-            xg_for_away=None,
-            xg_against_away=None,
-            odds_dnb_home=prices.get("odds_dnb_home") or None,
-            odds_dnb_away=prices.get("odds_dnb_away") or None,
-            odds_btts_no=prices.get("odds_btts_no") or None,
-        )
-
-        warnings = check_coerenza_quote(
-            prices.get("odds_1"),
-            prices.get("odds_x"),
-            prices.get("odds_2"),
-            prices.get("odds_over25"),
-            prices.get("odds_under25"),
-        )
-        mpi = compute_market_pressure_index(
-            prices.get("odds_1"),
-            prices.get("odds_x"),
-            prices.get("odds_2"),
-            prices.get("odds_over25"),
-            prices.get("odds_under25"),
-            prices.get("odds_dnb_home"),
-            prices.get("odds_dnb_away"),
-        )
-        conf = compute_global_confidence(
-            base_aff=100,
-            n_warnings=len(warnings),
-            mpi=mpi,
-            has_xg=False,
-        )
-
-        p_btts_mod = res["btts"] * 100
-        p_over25_mod = res["over_25"] * 100 if "over_25" in res else res["over_25"] * 100
-
-        # filtri (almeno uno)
-        if (p_btts_mod >= soglia_btts) or (p_over25_mod >= soglia_over25) or (conf >= soglia_conf):
-            commence_time = ev.get("commence_time", "")
-            rows.append({
-                "match": f"{home} vs {away}",
-                "start": commence_time.replace("T", " ")[:16],
-                "p_BTTS_mod_%": round(p_btts_mod, 1),
-                "p_Over25_mod_%": round(p_over25_mod, 1),
-                "p_1_%": round(res["p_home"]*100, 1),
-                "p_X_%": round(res["p_draw"]*100, 1),
-                "p_2_%": round(res["p_away"]*100, 1),
-                "MPI": mpi,
-                "Confidence": conf,
-                "odds_btts_yes": prices.get("odds_btts_yes"),
-                "odds_btts_no": prices.get("odds_btts_no"),
-            })
-
-    if rows:
-        df = pd.DataFrame(rows)
-        # ordina per BTTS desc
-        df = df.sort_values(by=["p_BTTS_mod_%", "p_Over25_mod_%"], ascending=False)
-        return df
-    else:
-        return pd.DataFrame([])
-
-# ============================================================
 #              STREAMLIT APP
 # ============================================================
 
@@ -913,33 +821,6 @@ if st.session_state.soccer_leagues:
     if st.button("3) Carica partite di questa lega"):
         st.session_state.events_for_league = oddsapi_get_events_for_league(selected_league_key)
         st.success(f"Partite trovate: {len(st.session_state.events_for_league)}")
-
-    # ============================================================
-    # 0.b SCANSIONE LEGA AUTOMATICA
-    # ============================================================
-
-    if st.session_state.events_for_league:
-        st.markdown("### 🛰️ Scansiona tutta la lega (autofiltra partite interessanti)")
-        colf1, colf2, colf3 = st.columns(3)
-        with colf1:
-            soglia_btts = st.number_input("Min BTTS modello %", value=55.0, step=1.0)
-        with colf2:
-            soglia_over25 = st.number_input("Min Over 2.5 modello %", value=55.0, step=1.0)
-        with colf3:
-            soglia_conf = st.number_input("Min Confidence globale", value=50, step=1)
-
-        if st.button("Scansiona questa lega"):
-            df_scan = scan_league_and_filter(
-                st.session_state.events_for_league,
-                soglia_btts=soglia_btts,
-                soglia_over25=soglia_over25,
-                soglia_conf=soglia_conf,
-            )
-            if df_scan.empty:
-                st.info("Nessuna partita supera i filtri impostati. Abbassa un po' le soglie.")
-            else:
-                st.success(f"Trovate {len(df_scan)} partite interessanti.")
-                st.dataframe(df_scan, use_container_width=True)
 
     # selezione singola partita
     if st.session_state.events_for_league:
