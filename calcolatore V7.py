@@ -29,6 +29,7 @@ PREFERRED_BOOKS = [
     "williamhill",
 ]
 
+
 # ============================================================
 #         FUNZIONI THE ODDS API (per scegliere la partita)
 # ============================================================
@@ -221,6 +222,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
 
     return out
 
+
 # ============================================================
 #            API-FOOTBALL SOLO PER RISULTATI REALI
 # ============================================================
@@ -237,12 +239,14 @@ def apifootball_get_fixtures_by_date(d: str) -> list:
         print("errore api-football:", e)
         return []
 
+
 # ============================================================
 #                  FUNZIONI MODELLO
 # ============================================================
 
 def poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
 
 def entropia_poisson(lam: float, max_k: int = 15) -> float:
     e = 0.0
@@ -252,8 +256,10 @@ def entropia_poisson(lam: float, max_k: int = 15) -> float:
             e -= p * math.log2(p)
     return e
 
+
 def decimali_a_prob(odds: float) -> float:
     return 1 / odds if odds and odds > 0 else 0.0
+
 
 def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, float, float]:
     p1 = 1 / o1 if o1 and o1 > 0 else 0.0
@@ -263,6 +269,7 @@ def normalize_1x2_from_odds(o1: float, ox: float, o2: float) -> Tuple[float, flo
     if tot == 0:
         return 0.33, 0.34, 0.33
     return p1 / tot, px / tot, p2 / tot
+
 
 def gol_attesi_migliorati(spread: float, total: float,
                           p1: float, p2: float) -> Tuple[float, float]:
@@ -282,6 +289,7 @@ def gol_attesi_migliorati(spread: float, total: float,
     la /= fatt_dir
     return max(lh, 0.05), max(la, 0.05)
 
+
 def blend_lambda_market_xg(lambda_market_home: float,
                            lambda_market_away: float,
                            xg_for_home: float,
@@ -295,11 +303,13 @@ def blend_lambda_market_xg(lambda_market_home: float,
     la = w_market * lambda_market_away + (1 - w_market) * xg_away_est
     return max(lh, 0.05), max(la, 0.05)
 
+
 def max_goals_adattivo(lh: float, la: float) -> int:
     return max(8, int((lh + la) * 2.5))
 
+
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
-    # aggiunto clamp per evitare valori negativi in 0-0
+    # aggiunto piccolo clamp per evitare valori negativi in 0-0
     if h == 0 and a == 0:
         val = 1 - (lh * la * rho)
         return max(0.2, val)
@@ -310,6 +320,7 @@ def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
     elif h == 1 and a == 1:
         return 1 - rho
     return 1.0
+
 
 def build_score_matrix(lh: float, la: float, rho: float) -> List[List[float]]:
     mg = max_goals_adattivo(lh, la)
@@ -324,6 +335,7 @@ def build_score_matrix(lh: float, la: float, rho: float) -> List[List[float]]:
     tot = sum(sum(r) for r in mat)
     mat = [[p / tot for p in r] for r in mat]
     return mat
+
 
 def calc_match_result_from_matrix(mat: List[List[float]]) -> Tuple[float, float, float]:
     p_home = p_draw = p_away = 0.0
@@ -340,6 +352,7 @@ def calc_match_result_from_matrix(mat: List[List[float]]) -> Tuple[float, float,
     tot = p_home + p_draw + p_away
     return p_home / tot, p_draw / tot, p_away / tot
 
+
 def calc_over_under_from_matrix(mat: List[List[float]], soglia: float) -> Tuple[float, float]:
     over = 0.0
     mg = len(mat) - 1
@@ -349,9 +362,11 @@ def calc_over_under_from_matrix(mat: List[List[float]], soglia: float) -> Tuple[
                 over += mat[h][a]
     return over, 1 - over
 
+
 def calc_bt_ts_from_matrix(mat: List[List[float]]) -> float:
     mg = len(mat) - 1
     return sum(mat[h][a] for h in range(1, mg + 1) for a in range(1, mg + 1))
+
 
 def calc_gg_over25_from_matrix(mat: List[List[float]]) -> float:
     mg = len(mat) - 1
@@ -362,6 +377,7 @@ def calc_gg_over25_from_matrix(mat: List[List[float]]) -> float:
                 s += mat[h][a]
     return s
 
+
 def prob_pari_dispari_from_matrix(mat: List[List[float]]) -> Tuple[float, float]:
     mg = len(mat) - 1
     even = 0.0
@@ -371,11 +387,13 @@ def prob_pari_dispari_from_matrix(mat: List[List[float]]) -> Tuple[float, float]
                 even += mat[h][a]
     return even, 1 - even
 
+
 def prob_clean_sheet_from_matrix(mat: List[List[float]]) -> Tuple[float, float]:
     mg = len(mat) - 1
     cs_away = sum(mat[0][a] for a in range(mg + 1))
     cs_home = sum(mat[h][0] for h in range(mg + 1))
     return cs_home, cs_away
+
 
 def dist_gol_da_matrice(mat: List[List[float]]):
     mg = len(mat) - 1
@@ -388,12 +406,14 @@ def dist_gol_da_matrice(mat: List[List[float]]):
             da[a] += p
     return dh, da
 
+
 def prob_multigol_from_dist(dist: List[float], gmin: int, gmax: int) -> float:
     s = 0.0
     for k in range(gmin, gmax + 1):
         if k < len(dist):
             s += dist[k]
     return s
+
 
 def combo_multigol_filtrata(multigol_casa: dict, multigol_away: dict, soglia: float = 0.5):
     out = []
@@ -404,6 +424,7 @@ def combo_multigol_filtrata(multigol_casa: dict, multigol_away: dict, soglia: fl
                 out.append({"combo": f"Casa {kc} + Ospite {ka}", "prob": p})
     out.sort(key=lambda x: x["prob"], reverse=True)
     return out
+
 
 def prob_esito_over_from_matrix(mat: List[List[float]], esito: str, soglia: float) -> float:
     mg = len(mat) - 1
@@ -421,6 +442,7 @@ def prob_esito_over_from_matrix(mat: List[List[float]], esito: str, soglia: floa
                 s += p
     return s
 
+
 def prob_dc_over_from_matrix(mat: List[List[float]], dc: str, soglia: float) -> float:
     mg = len(mat) - 1
     s = 0.0
@@ -437,6 +459,7 @@ def prob_dc_over_from_matrix(mat: List[List[float]], dc: str, soglia: float) -> 
                 s += p
     return s
 
+
 def prob_esito_btts_from_matrix(mat: List[List[float]], esito: str) -> float:
     mg = len(mat) - 1
     s = 0.0
@@ -450,6 +473,7 @@ def prob_esito_btts_from_matrix(mat: List[List[float]], esito: str) -> float:
             elif esito == '2' and h < a:
                 s += p
     return s
+
 
 def prob_dc_btts_from_matrix(mat: List[List[float]], dc: str) -> float:
     mg = len(mat) - 1
@@ -468,6 +492,7 @@ def prob_dc_btts_from_matrix(mat: List[List[float]], dc: str) -> float:
                 s += p
     return s
 
+
 def combo_over_ht_ft(lh: float, la: float) -> Dict[str, float]:
     soglie = [0.5, 1.5, 2.5, 3.5]
     out = {}
@@ -482,6 +507,7 @@ def combo_over_ht_ft(lh: float, la: float) -> Dict[str, float]:
             out[f"Over HT {ht} + Over FT {ft}"] = min(1.0, p_over_ht * p_over_ft)
     return out
 
+
 def top_results_from_matrix(mat, top_n=10, soglia_min=0.005):
     mg = len(mat) - 1
     risultati = []
@@ -492,6 +518,7 @@ def top_results_from_matrix(mat, top_n=10, soglia_min=0.005):
                 risultati.append((h, a, p * 100))
     risultati.sort(key=lambda x: x[2], reverse=True)
     return risultati[:top_n]
+
 
 def risultato_completo(
     spread: float,
@@ -532,7 +559,7 @@ def risultato_completo(
         lh, la = blend_lambda_market_xg(
             lh, la,
             xg_for_home, xg_against_home,
-            xg_for_away, xg_against_away,   # ✅ corretto
+            xg_for_away, xg_against_away,
             w_market=0.6
         )
 
@@ -669,6 +696,7 @@ def risultato_completo(
         "scost": scost,
     }
 
+
 # ============================================================
 #   NUOVE FUNZIONI: check coerenza, market pressure, confidence
 # ============================================================
@@ -706,6 +734,7 @@ def check_coerenza_quote(
         warnings.append("Manca almeno una quota Over/Under 2.5 → controlli incompleti.")
 
     return warnings
+
 
 def compute_market_pressure_index(
     odds_1: float,
@@ -750,6 +779,7 @@ def compute_market_pressure_index(
 
     return max(0, min(100, score))
 
+
 def compute_structure_affidability(
     spread_ap: float,
     spread_co: float,
@@ -792,6 +822,7 @@ def compute_structure_affidability(
 
     return max(0, min(100, aff))
 
+
 def compute_global_confidence(
     base_aff: int,
     n_warnings: int,
@@ -807,6 +838,7 @@ def compute_global_confidence(
     if has_xg:
         conf += 5
     return max(0, min(100, conf))
+
 
 # ============================================================
 #              STREAMLIT APP
@@ -978,6 +1010,7 @@ with col_xg2:
     xga_tot_away = st.text_input("xGA totali OSPITE", "")
     partite_away = st.text_input("Partite giocate OSPITE (es. 10 o 5-3-2)", "")
 
+
 def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
     if xg_tot_s.strip() == "" or xga_tot_s.strip() == "" or record_s.strip() == "":
         return None, None
@@ -994,6 +1027,7 @@ def parse_xg_block(xg_tot_s: str, xga_tot_s: str, record_s: str):
         return xg_tot / matches, xga_tot / matches
     except Exception:
         return None, None
+
 
 xg_home_for, xg_home_against = parse_xg_block(xg_tot_home, xga_tot_home, partite_home)
 xg_away_for, xg_away_against = parse_xg_block(xg_tot_away, xga_tot_away, partite_away)
