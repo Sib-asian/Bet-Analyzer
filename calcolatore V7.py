@@ -1,6 +1,6 @@
 import math
 from typing import Dict, Any, List, Tuple
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import pandas as pd
 import os
 import requests
@@ -28,7 +28,6 @@ PREFERRED_BOOKS = [
     "unibet_eu",
     "williamhill",
 ]
-
 
 # ============================================================
 #         FUNZIONI THE ODDS API (per scegliere la partita)
@@ -104,9 +103,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
     Da 1 evento della Odds API estrae:
     - media 1X2
     - media Over/Under 2.5
-    - DNB Casa / DNB Trasferta:
-        1) prova a leggerli dal mercato 'draw_no_bet' (se API premium li dà)
-        2) altrimenti li ricava dallo spread 0
+    - DNB Casa / DNB Trasferta
     - quota GG (BTTS yes) se presente
     """
     out = {
@@ -126,7 +123,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
     if not bookmakers:
         return out
 
-    # accumulatori per medie
     h2h_home, h2h_draw, h2h_away = [], [], []
     over25_list, under25_list = [], []
     dnb_home_list, dnb_away_list = [], []
@@ -166,7 +162,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif "under" in name:
                             under25_list.append(price)
 
-            # 1) DNB ufficiale (mercato dedicato)
+            # DNB ufficiale
             elif mk_key in ["draw_no_bet", "dnb"]:
                 for o in mk.get("outcomes", []):
                     name = o.get("name", "")
@@ -178,7 +174,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     elif name == out["away"]:
                         dnb_away_list.append(price)
 
-            # 2) fallback: spreads → se il point è 0 lo leggiamo come DNB
+            # fallback: spread 0 = dnb
             elif mk_key == "spreads":
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
@@ -192,7 +188,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif name == out["away"]:
                             dnb_away_list.append(price)
 
-            # BTTS / entrambe segnano
+            # BTTS
             elif "btts" in mk_key or "both_teams_to_score" in mk_key:
                 for o in mk.get("outcomes", []):
                     name = o.get("name", "").lower()
@@ -202,7 +198,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     if "yes" in name or "sì" in name or "si" in name:
                         btts_list.append(price)
 
-    # medie
     if h2h_home:
         out["odds_1"] = sum(h2h_home) / len(h2h_home)
     if h2h_draw:
@@ -222,7 +217,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
 
     return out
 
-
 # ============================================================
 #            API-FOOTBALL SOLO PER RISULTATI REALI
 # ============================================================
@@ -238,7 +232,6 @@ def apifootball_get_fixtures_by_date(d: str) -> list:
     except Exception as e:
         print("errore api-football:", e)
         return []
-
 
 # ============================================================
 #                  FUNZIONI MODELLO
@@ -309,7 +302,7 @@ def max_goals_adattivo(lh: float, la: float) -> int:
 
 
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
-    # aggiunto piccolo clamp per evitare valori negativi in 0-0
+    # clamp per evitare valori negativi in 0-0
     if h == 0 and a == 0:
         val = 1 - (lh * la * rho)
         return max(0.2, val)
@@ -563,7 +556,7 @@ def risultato_completo(
             w_market=0.6
         )
 
-    # 5) rho (correlazione BTTS) – coeff più morbido
+    # 5) rho
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.5
@@ -575,12 +568,11 @@ def risultato_completo(
     # 6) matrice FT
     mat_ft = build_score_matrix(lh, la, rho)
 
-    # rapporto HT più robusto
+    # rapporto HT
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
     ratio_ht = max(0.35, min(0.55, ratio_ht))
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
-    # probabilità principali
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
@@ -696,7 +688,6 @@ def risultato_completo(
         "scost": scost,
     }
 
-
 # ============================================================
 #   NUOVE FUNZIONI: check coerenza, market pressure, confidence
 # ============================================================
@@ -711,23 +702,17 @@ def check_coerenza_quote(
     """Controlli veloci per vedere se le quote hanno qualcosa di storto."""
     warnings = []
 
-    # 1x2 base
     if odds_1 and odds_2 and odds_1 < 1.25 and odds_2 < 5:
         warnings.append("Casa troppo favorita ma trasferta non abbastanza alta.")
     if odds_1 and odds_2 and odds_1 > 3.0 and odds_2 > 3.0:
         warnings.append("Sia casa che trasferta sopra 3.0 → match molto caotico.")
 
-    # over/under
     if odds_over25 and odds_under25:
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
         somma = p_over + p_under
-
-        # range più stretto e realistico
         if not (1.01 < somma < 1.15):
             warnings.append("Mercato over/under 2.5 con margine anomalo (controlla le quote).")
-
-        # se 1 è super favorita ma over è alto
         if odds_1 and odds_1 < 1.5 and odds_over25 > 2.2:
             warnings.append("Favorita netta ma over 2.5 alto → controlla linea gol.")
     else:
@@ -747,40 +732,36 @@ def compute_market_pressure_index(
 ) -> int:
     """
     0–100: più alto = mercato pulito e direzionale.
-    Questa versione è un po' più sensibile, così non resti fermo sui 55.
     """
-    score = 40  # parto più basso così c'è spazio per salire
+    score = 40  # base più bassa
 
-    # 1) forza del favorito
-    if odds_1 and odds_2:
-        ratio = odds_2 / odds_1 if odds_1 > 0 else 1
-        # se ratio > 2 vuol dire che 1 è davvero più bassa di 2
+    # favorito chiaro
+    if odds_1 and odds_2 and odds_1 > 0:
+        ratio = odds_2 / odds_1
         if ratio >= 2.5:
-            score += 25          # match molto direzionale
+            score += 25
         elif ratio >= 2.0:
             score += 18
         elif ratio >= 1.6:
             score += 10
         else:
-            score += 4           # leggero favorito
+            score += 4
 
-    # 2) DNB che conferma
+    # dnb che conferma
     dnb_bonus = 0
     if odds_dnb_home and odds_dnb_home > 1 and odds_1:
         if odds_1 < 2.1 and odds_dnb_home < 1.55:
             dnb_bonus += 8
         elif odds_1 < 2.4 and odds_dnb_home < 1.65:
             dnb_bonus += 4
-
     if odds_dnb_away and odds_dnb_away > 1 and odds_2:
         if odds_2 < 2.1 and odds_dnb_away < 1.55:
             dnb_bonus += 8
         elif odds_2 < 2.4 and odds_dnb_away < 1.65:
             dnb_bonus += 4
-
     score += dnb_bonus
 
-    # 3) over/under pulito
+    # over/under pulito
     if odds_over25 and odds_under25:
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
@@ -794,9 +775,7 @@ def compute_market_pressure_index(
     else:
         score -= 5
 
-    # 4) piccolo clamp finale
     return max(0, min(100, score))
-
 
 
 def compute_structure_affidability(
@@ -810,29 +789,22 @@ def compute_structure_affidability(
     odds_x: float,
     odds_2: float
 ) -> int:
-    """
-    Affidabilità strutturale del match: più variazioni ci sono, più scende.
-    """
     aff = 100
 
     diff_spread = abs(spread_ap - spread_co)
     diff_total = abs(total_ap - total_co)
 
-    # ogni 0.25 di differenza toglie, ma con un tetto
-    aff -= min(3, int(diff_spread / 0.25)) * 8   # max -24
-    aff -= min(3, int(diff_total / 0.25)) * 5    # max -15
+    aff -= min(3, int(diff_spread / 0.25)) * 8
+    aff -= min(3, int(diff_total / 0.25)) * 5
 
-    # entropia alta → match sporco, ma solo se non è una partita da under durissimo
     if ent_media > 2.25 and total_co >= 2.0:
         aff -= 15
     elif ent_media > 2.10 and total_co >= 2.0:
         aff -= 8
 
-    # niente xG → un po' meno affidabile
     if not has_xg:
         aff -= 7
 
-    # 1X2 troppo piatta → meno affidabile
     if odds_1 and odds_x and odds_2:
         probs = [1/odds_1, 1/odds_x, 1/odds_2]
         spread_prob = max(probs) - min(probs)
@@ -848,21 +820,17 @@ def compute_global_confidence(
     mpi: int,
     has_xg: bool,
 ) -> int:
-    """
-    mix: affidabilità tua, penalità per warning, bonus per market pressure, bonus se hai xG
-    """
     conf = base_aff
     conf -= n_warnings * 5
-    conf += int((mpi - 50) * 0.3)  # se mpi > 50 aggiunge, se < 50 toglie
+    conf += int((mpi - 50) * 0.3)
     if has_xg:
         conf += 5
     return max(0, min(100, conf))
 
+
 def valuta_evento_rapido(event: dict) -> dict:
     """
-    Prende un evento grezzo della Odds API e prova a dargli un punteggio
-    usando le funzioni che abbiamo già: estrazione quote -> risultato_completo -> confidence.
-    È una versione 'light' pensata per il palinsesto.
+    Valutazione "light" per palinsesto.
     """
     prices = oddsapi_extract_prices(event)
 
@@ -870,7 +838,6 @@ def valuta_evento_rapido(event: dict) -> dict:
     away = prices.get("away") or event.get("away_team") or "Ospite"
     match_name = f"{home} vs {away}"
 
-    # se mancano troppe quote lo scartiamo
     if not prices.get("odds_1") or not prices.get("odds_2"):
         return {
             "match": match_name,
@@ -938,6 +905,7 @@ def valuta_evento_rapido(event: dict) -> dict:
         "p_away": ris["p_away"] * 100,
         "warnings": "; ".join(warnings),
     }
+
 # ============================================================
 #              STREAMLIT APP
 # ============================================================
@@ -991,39 +959,54 @@ else:
 st.markdown("---")
 
 # ============================================================
-# 0. PRENDI PARTITA DALL’API
-# ============================================================
-# ============================================================
 # 📅 PALINSESTO RAPIDO DEL GIORNO
 # ============================================================
 
-st.subheader("📅 Palinsesto rapido (tutte le partite che trovo ora)")
+st.subheader("📅 Palinsesto rapido (solo le partite di oggi)")
 
 if st.button("Genera palinsesto del giorno"):
-    # prendo tutte le leghe calcio
     leagues = oddsapi_get_soccer_leagues()
     all_rows = []
+    today_iso = date.today().isoformat()
 
     for lg in leagues:
         lg_key = lg.get("key")
         events = oddsapi_get_events_for_league(lg_key)
         for ev in events:
+            # filtro per OGGI
+            start_raw = ev.get("commence_time")
+            if not start_raw:
+                continue
+            # la API di solito dà tipo 2025-11-08T12:00:00Z
+            try:
+                dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+                if dt_utc.date().isoformat() != today_iso:
+                    continue
+            except Exception:
+                # se non riesco a fare il parse la salto
+                continue
+
             row = valuta_evento_rapido(ev)
-            # scarto quelle senza quote significative
             if row["confidence"] > 0:
                 row["lega"] = lg.get("title", lg_key)
                 all_rows.append(row)
 
     if not all_rows:
-        st.warning("Nessuna partita valutabile trovata adesso.")
+        st.warning("Oggi non ho trovato partite di calcio con quote utilizzabili.")
     else:
-        df_pal = pd.DataFrame(all_rows).sort_values(
-            by=["confidence", "mpi"],
-            ascending=False
-        ).reset_index(drop=True)
-        st.write("Qui sotto le migliori di oggi (in alto le più 'pulite'):")
+        df_pal = (
+            pd.DataFrame(all_rows)
+            .sort_values(by=["confidence", "mpi"], ascending=False)
+            .reset_index(drop=True)
+        )
+        st.write("Qui sotto le migliori di oggi (in alto le più ‘pulite’):")
         st.dataframe(df_pal.head(20))
         st.info("💡 Le prime 3–4 partite sono quelle con struttura più affidabile secondo il modello.")
+
+# ============================================================
+# 0. PRENDI PARTITA DALL’API (manuale)
+# ============================================================
+
 st.subheader("🔍 Prendi una partita da The Odds API e riempi le quote")
 
 col_a, col_b = st.columns([1, 2])
@@ -1198,20 +1181,17 @@ if st.button("CALCOLA MODELLO"):
 
     ent_media = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
 
-    # 1) check coerenza quote
     warnings = check_coerenza_quote(
         odds_1, odds_x, odds_2,
         odds_over25, odds_under25
     )
 
-    # 2) market pressure index
     mpi = compute_market_pressure_index(
         odds_1, odds_x, odds_2,
         odds_over25, odds_under25,
         odds_dnb_home, odds_dnb_away
     )
 
-    # 3) affidabilità della struttura
     aff = compute_structure_affidability(
         spread_ap, spread_co,
         total_ap, total_co,
@@ -1220,7 +1200,6 @@ if st.button("CALCOLA MODELLO"):
         odds_1, odds_x, odds_2
     )
 
-    # 4) confidence globale
     global_conf = compute_global_confidence(
         base_aff=aff,
         n_warnings=len(warnings),
@@ -1265,10 +1244,8 @@ if st.button("CALCOLA MODELLO"):
     st.subheader("💰 Value Finder")
     rows = []
 
-    # flag se OU è anomalo
     anomalo_ou = any("over/under 2.5" in w.lower() for w in warnings)
 
-    # 1X2
     for lab, p_mod, odd in [
         ("1", ris_co["p_home"], odds_1),
         ("X", ris_co["p_draw"], odds_x),
@@ -1284,7 +1261,6 @@ if st.button("CALCOLA MODELLO"):
             "Δ pp": round(diff, 2),
         })
 
-    # Over/Under solo se quote sane
     if not anomalo_ou:
         if odds_over25 and odds_over25 > 1:
             p_mod = ris_co["over_25"]
@@ -1310,7 +1286,6 @@ if st.button("CALCOLA MODELLO"):
                 "Δ pp": round(diff, 2),
             })
 
-    # GG (BTTS)
     if odds_btts and odds_btts > 1:
         p_mod = ris_co["btts"]
         p_book = decimali_a_prob(odds_btts)
@@ -1324,75 +1299,70 @@ if st.button("CALCOLA MODELLO"):
         })
 
     df_vf = pd.DataFrame(rows)
-df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ +2 punti %
-st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
+    df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ 2pp
+    st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
+    # espansioni
+    with st.expander("① Probabilità principali"):
+        st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
+        st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
+        st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
 
-df_vf = pd.DataFrame(rows)
-df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]  # mostra solo value >= 2pp
-st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
+    with st.expander("② Esito finale e parziale"):
+        st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
+        st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
+        st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
+        st.write("Double Chance:")
+        for k, v in ris_co["dc"].items():
+            st.write(f"- {k}: {v*100:.1f}%")
 
-# espansioni
-with st.expander("① Probabilità principali"):
-    st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
-    st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
-    st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
+    with st.expander("③ Over / Under"):
+        st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
+        st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
+        st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
+        st.write(f"Under 2.5: {ris_co['under_25']*100:.1f}%")
+        st.write(f"Over 3.5: {ris_co['over_35']*100:.1f}%")
+        st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
+        st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
 
-with st.expander("② Esito finale e parziale"):
-    st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
-    st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
-    st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
-    st.write("Double Chance:")
-    for k, v in ris_co["dc"].items():
-        st.write(f"- {k}: {v*100:.1f}%")
+    with st.expander("④ Gol pari/dispari"):
+        st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
+        st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
+        st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
+        st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
 
-with st.expander("③ Over / Under"):
-    st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
-    st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
-    st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
-    st.write(f"Under 2.5: {ris_co['under_25']*100:.1f}%")
-    st.write(f"Over 3.5: {ris_co['over_35']*100:.1f}%")
-    st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
-    st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
+    with st.expander("⑤ Clean sheet e info modello"):
+        st.write(f"Clean Sheet Casa: {ris_co['cs_home']*100:.1f}%")
+        st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
+        st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
+        st.write(f"λ Casa: {ris_co['lambda_home']:.3f}")
+        st.write(f"λ Trasferta: {ris_co['lambda_away']:.3f}")
+        st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
+        st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
 
-with st.expander("④ Gol pari/dispari"):
-    st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
-    st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
-    st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
-    st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
-
-with st.expander("5️⃣ Clean sheet e info modello"):
-    st.write(f"Clean Sheet Casa: {ris_co['cs_home']*100:.1f}%")
-    st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
-    st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
-    st.write(f"λ Casa: {ris_co['lambda_home']:.3f}")
-    st.write(f"λ Trasferta: {ris_co['lambda_away']:.3f}")
-    st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
-    st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
-
-    with st.expander("6️⃣ Multigol Casa"):
+    with st.expander("⑥ Multigol Casa"):
         st.write({k: f"{v*100:.1f}%" for k, v in ris_co["multigol_home"].items()})
 
-    with st.expander("7️⃣ Multigol Trasferta"):
+    with st.expander("⑦ Multigol Trasferta"):
         st.write({k: f"{v*100:.1f}%" for k, v in ris_co["multigol_away"].items()})
 
-    with st.expander("8️⃣ Vittoria con margine"):
+    with st.expander("⑧ Vittoria con margine"):
         st.write(f"Vittoria casa almeno 2 gol scarto: {ris_co['marg2']*100:.1f}%")
         st.write(f"Vittoria casa almeno 3 gol scarto: {ris_co['marg3']*100:.1f}%")
 
-    with st.expander("9️⃣ Combo mercati (1&Over, DC+GG, ecc.)"):
+    with st.expander("⑨ Combo mercati (1&Over, DC+GG, ecc.)"):
         for k, v in ris_co["combo_book"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    with st.expander("🔟 Top 10 risultati esatti"):
+    with st.expander("⑩ Top 10 risultati esatti"):
         for h, a, p in ris_co["top10"]:
             st.write(f"{h}-{a}: {p:.1f}%")
 
-    with st.expander("1️⃣1️⃣ Combo Multigol Filtrate (>=50%)"):
+    with st.expander("⑪ Combo Multigol Filtrate (>=50%)"):
         for c in ris_co["combo_ft_filtrate"]:
             st.write(f"{c['combo']}: {c['prob']*100:.1f}%")
 
-    with st.expander("1️⃣2️⃣ Combo Over HT + Over FT"):
+    with st.expander("⑫ Combo Over HT + Over FT"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
