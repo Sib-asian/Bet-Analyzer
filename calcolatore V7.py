@@ -53,14 +53,16 @@ def oddsapi_get_soccer_leagues() -> List[dict]:
 def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
     """
     Prende gli eventi per una lega di calcio.
-    Allargo le regioni perché con solo eu,uk spesso torna [].
+    1) prova a prenderli dall'endpoint /odds (con tutti i mercati che ci servono)
+    2) se torna vuoto, fa fallback su /events così almeno abbiamo le partite
     """
     try:
+        # 1) tentativo principale: ODDS
         r = requests.get(
             f"{THE_ODDS_BASE}/sports/{league_key}/odds",
             params={
                 "apiKey": THE_ODDS_API_KEY,
-                # Aggiunto US e US2 per avere più disponibilità
+                # allarghiamo le regioni per avere più chance
                 "regions": "us,us2,eu,uk",
                 "markets": "h2h,totals,spreads,both_teams_to_score",
                 "oddsFormat": "decimal",
@@ -71,15 +73,36 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         r.raise_for_status()
         data = r.json()
 
-        # Debug utile se non arrivano eventi
-        if not isinstance(data, list):
-            print("⚠️ Risposta API inattesa:", data)
-            return []
+        # se abbiamo una lista non vuota, bene così
+        if isinstance(data, list) and len(data) > 0:
+            return data
 
-        if len(data) == 0:
-            print(f"Nessuna partita trovata per {league_key} (nessun book con odds attive).")
+        # 2) altrimenti fallback: EVENTS
+        r2 = requests.get(
+            f"{THE_ODDS_BASE}/sports/{league_key}/events",
+            params={
+                "apiKey": THE_ODDS_API_KEY,
+                "dateFormat": "iso",
+            },
+            timeout=8,
+        )
+        r2.raise_for_status()
+        data2 = r2.json()
 
-        return data
+        # normalizzo gli eventi perché il resto del codice
+        # si aspetta la chiave "bookmakers"
+        events_norm = []
+        if isinstance(data2, list):
+            for ev in data2:
+                events_norm.append({
+                    "id": ev.get("id"),
+                    "home_team": ev.get("home_team"),
+                    "away_team": ev.get("away_team"),
+                    "commence_time": ev.get("commence_time"),
+                    # niente quote, le metterai tu a mano
+                    "bookmakers": [],
+                })
+        return events_norm
 
     except Exception as e:
         print("❌ Errore durante il caricamento eventi:", e)
