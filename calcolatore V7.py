@@ -177,7 +177,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif name == out["away"]:
                             dnb_away_list.append(price)
 
-            # BTTS / entrambe segnano (usiamo un match più elastico)
+            # BTTS / entrambe segnano
             elif "btts" in mk_key or "both_teams_to_score" in mk_key:
                 for o in mk.get("outcomes", []):
                     name = o.get("name", "").lower()
@@ -285,7 +285,7 @@ def max_goals_adattivo(lh: float, la: float) -> int:
     return max(8, int((lh + la) * 2.5))
 
 def tau_dixon_coles(h: int, a: int, lh: float, la: float, rho: float) -> float:
-    # aggiunto piccolo clamp per evitare valori negativi in 0-0
+    # aggiunto clamp per evitare valori negativi in 0-0
     if h == 0 and a == 0:
         val = 1 - (lh * la * rho)
         return max(0.2, val)
@@ -509,30 +509,37 @@ def risultato_completo(
             p2 = p2 * 0.7 + pdnb_away * 0.3
             px = max(0.0, 1.0 - (p1 + p2))
 
+    # 3) lambda di partenza da spread/total
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
 
+    # 4) se ho xG li fondo con le lambda di mercato
     if (xg_for_home is not None and xg_against_home is not None and
         xg_for_away is not None and xg_against_away is not None):
         lh, la = blend_lambda_market_xg(
             lh, la,
             xg_for_home, xg_against_home,
-            xg_for_away, xg_against_away,
+            xg_for_away, xg_against_away,   # ✅ corretto
             w_market=0.6
         )
 
-    # rho (correlazione BTTS)
+    # 5) rho (correlazione BTTS) – coeff più morbido
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
-        rho = 0.15 + (p_btts_market - 0.55) * 0.8
+        rho = 0.15 + (p_btts_market - 0.55) * 0.5
         rho = max(0.05, min(0.45, rho))
     else:
         rho = 0.15 + (px * 0.4)
         rho = max(0.05, min(0.4, rho))
 
+    # 6) matrice FT
     mat_ft = build_score_matrix(lh, la, rho)
+
+    # rapporto HT più robusto
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
+    ratio_ht = max(0.35, min(0.55, ratio_ht))
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
+    # probabilità principali
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
@@ -674,8 +681,8 @@ def check_coerenza_quote(
         p_under = 1 / odds_under25
         somma = p_over + p_under
 
-        # range realistico per OU 2.5 con margine
-        if not (1.00 < somma < 1.25):
+        # range più stretto e realistico
+        if not (1.01 < somma < 1.15):
             warnings.append("Mercato over/under 2.5 con margine anomalo (controlla le quote).")
 
         # se 1 è super favorita ma over è alto
@@ -720,7 +727,7 @@ def compute_market_pressure_index(
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
         somma = p_over + p_under
-        if 1.00 < somma < 1.25:
+        if 1.01 < somma < 1.15:
             score += 5
         else:
             score -= 5
@@ -748,9 +755,9 @@ def compute_structure_affidability(
     diff_spread = abs(spread_ap - spread_co)
     diff_total = abs(total_ap - total_co)
 
-    # ogni 0.25 di differenza toglie
-    aff -= int(diff_spread / 0.25) * 8
-    aff -= int(diff_total / 0.25) * 5
+    # ogni 0.25 di differenza toglie, ma con un tetto
+    aff -= min(3, int(diff_spread / 0.25)) * 8   # max -24
+    aff -= min(3, int(diff_total / 0.25)) * 5    # max -15
 
     # entropia alta → match sporco, ma solo se non è una partita da under durissimo
     if ent_media > 2.25 and total_co >= 2.0:
