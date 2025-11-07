@@ -34,6 +34,23 @@ PREFERRED_BOOKS = [
 ]
 
 # ============================================================
+#       FUNZIONE NUOVA: pulizia quote troppo estreme
+# ============================================================
+
+def _clean_prices(values: List[float], tol: float = 0.25) -> List[float]:
+    """
+    Tieni solo le quote che stanno dentro ±25% dalla media.
+    Serve a togliere il book “pazzo” che manda fuori la media.
+    """
+    if not values:
+        return values
+    avg = sum(values) / len(values)
+    low = avg * (1 - tol)
+    high = avg * (1 + tol)
+    return [v for v in values if low <= v <= high]
+
+
+# ============================================================
 #         FUNZIONI THE ODDS API (per scegliere la partita)
 # ============================================================
 
@@ -109,6 +126,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta
     - quota GG (BTTS yes) se presente
+    (con pulizia quote estreme)
     """
     out = {
         "home": event.get("home_team"),
@@ -202,6 +220,17 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     if "yes" in name or "sì" in name or "si" in name:
                         btts_list.append(price)
 
+    # 👇 PULIZIA liste prima della media
+    h2h_home = _clean_prices(h2h_home)
+    h2h_draw = _clean_prices(h2h_draw)
+    h2h_away = _clean_prices(h2h_away)
+    over25_list = _clean_prices(over25_list)
+    under25_list = _clean_prices(under25_list)
+    dnb_home_list = _clean_prices(dnb_home_list)
+    dnb_away_list = _clean_prices(dnb_away_list)
+    btts_list = _clean_prices(btts_list)
+
+    # medie
     if h2h_home:
         out["odds_1"] = sum(h2h_home) / len(h2h_home)
     if h2h_draw:
@@ -835,12 +864,38 @@ def compute_global_confidence(
 def valuta_evento_rapido(event: dict) -> dict:
     """
     Valutazione "light" per palinsesto.
+    Filtra anche partite non di oggi.
     """
     prices = oddsapi_extract_prices(event)
 
     home = prices.get("home") or event.get("home_team") or "Casa"
     away = prices.get("away") or event.get("away_team") or "Ospite"
     match_name = f"{home} vs {away}"
+
+    # filtro per oggi
+    start_raw = event.get("commence_time")
+    if not start_raw:
+        return {
+            "match": match_name,
+            "start": "",
+            "confidence": 0,
+            "mpi": 0,
+            "affidabilita": 0,
+            "warnings": "manca data",
+        }
+    try:
+        dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        if dt_utc.date() != date.today():
+            return {
+                "match": match_name,
+                "start": start_raw,
+                "confidence": 0,
+                "mpi": 0,
+                "affidabilita": 0,
+                "warnings": "non è oggi",
+            }
+    except Exception:
+        pass
 
     if not prices.get("odds_1") or not prices.get("odds_2"):
         return {
@@ -849,7 +904,7 @@ def valuta_evento_rapido(event: dict) -> dict:
             "confidence": 0,
             "mpi": 0,
             "affidabilita": 0,
-            "note": "quote 1/2 mancanti",
+            "warnings": "quote 1/2 mancanti",
         }
 
     ris = risultato_completo(
@@ -977,17 +1032,14 @@ if st.button("Genera palinsesto del giorno"):
         lg_key = lg.get("key")
         events = oddsapi_get_events_for_league(lg_key)
         for ev in events:
-            # filtro per OGGI
             start_raw = ev.get("commence_time")
             if not start_raw:
                 continue
-            # la API di solito dà tipo 2025-11-08T12:00:00Z
             try:
                 dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
                 if dt_utc.date().isoformat() != today_iso:
                     continue
             except Exception:
-                # se non riesco a fare il parse la salto
                 continue
 
             row = valuta_evento_rapido(ev)
