@@ -1328,13 +1328,17 @@ df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ +2 punti %
 st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
 
+    df_vf = pd.DataFrame(rows)
+    df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]  # mostra solo value >= 2pp
+    st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
+
     # espansioni
-    with st.expander("1️⃣ Probabilità principali"):
+    with st.expander("① Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
-        st.write(f"No Goal: {(1-ris_co['btts'])*100:.1f}%")
+        st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
         st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
 
-    with st.expander("2️⃣ Esito finale e parziale"):
+    with st.expander("② Esito finale e parziale"):
         st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
         st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
         st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
@@ -1342,7 +1346,7 @@ st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
         for k, v in ris_co["dc"].items():
             st.write(f"- {k}: {v*100:.1f}%")
 
-    with st.expander("3️⃣ Over / Under"):
+    with st.expander("③ Over / Under"):
         st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
         st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
         st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
@@ -1351,7 +1355,7 @@ st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
         st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
         st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
 
-    with st.expander("4️⃣ Gol pari/dispari"):
+    with st.expander("④ Gol pari/dispari"):
         st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
         st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
         st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
