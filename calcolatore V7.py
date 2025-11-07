@@ -599,7 +599,31 @@ if os.path.exists(ARCHIVE_FILE):
 else:
     st.info("Nessuno storico ancora.")
 
-st.markdown("---")
+# ===== cancellazione dallo storico =====
+st.markdown("### 🗑️ Cancella analisi dallo storico")
+if os.path.exists(ARCHIVE_FILE):
+    df_del = pd.read_csv(ARCHIVE_FILE)
+
+    if not df_del.empty:
+        # creo una label leggibile: "timestamp – partita"
+        df_del["label"] = df_del.apply(
+            lambda r: f"{r.get('timestamp','?')} – {r.get('match','(senza nome)')}",
+            axis=1
+        )
+
+        to_delete = st.selectbox(
+            "Seleziona la riga da eliminare:",
+            df_del["label"].tolist()
+        )
+
+        if st.button("Elimina riga selezionata"):
+            df_new = df_del[df_del["label"] != to_delete].drop(columns=["label"])
+            df_new.to_csv(ARCHIVE_FILE, index=False)
+            st.success("✅ Riga eliminata. Ricarica la pagina per vedere lo storico aggiornato.")
+    else:
+        st.info("Lo storico è vuoto, niente da cancellare.")
+else:
+    st.info("Nessun file storico, niente da cancellare.")
 
 # ============================================================
 # 0. PRENDI PARTITA DALL’API
