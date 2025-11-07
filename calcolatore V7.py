@@ -747,37 +747,56 @@ def compute_market_pressure_index(
 ) -> int:
     """
     0–100: più alto = mercato pulito e direzionale.
+    Questa versione è un po' più sensibile, così non resti fermo sui 55.
     """
-    score = 50  # base
+    score = 40  # parto più basso così c'è spazio per salire
 
-    # favorito chiaro
+    # 1) forza del favorito
     if odds_1 and odds_2:
-        if odds_1 < 1.7 and odds_2 > 3.5:
-            score += 20
-        elif odds_1 < 2.0 and odds_2 > 3.0:
+        ratio = odds_2 / odds_1 if odds_1 > 0 else 1
+        # se ratio > 2 vuol dire che 1 è davvero più bassa di 2
+        if ratio >= 2.5:
+            score += 25          # match molto direzionale
+        elif ratio >= 2.0:
+            score += 18
+        elif ratio >= 1.6:
             score += 10
+        else:
+            score += 4           # leggero favorito
 
-    # dnb che conferma
-    if odds_dnb_home and odds_dnb_home > 1:
-        if odds_1 and odds_1 < 2.0 and odds_dnb_home < 1.5:
-            score += 10
-    if odds_dnb_away and odds_dnb_away > 1:
-        if odds_2 and odds_2 < 2.0 and odds_dnb_away < 1.5:
-            score += 10
+    # 2) DNB che conferma
+    dnb_bonus = 0
+    if odds_dnb_home and odds_dnb_home > 1 and odds_1:
+        if odds_1 < 2.1 and odds_dnb_home < 1.55:
+            dnb_bonus += 8
+        elif odds_1 < 2.4 and odds_dnb_home < 1.65:
+            dnb_bonus += 4
 
-    # over/under ragionevoli
+    if odds_dnb_away and odds_dnb_away > 1 and odds_2:
+        if odds_2 < 2.1 and odds_dnb_away < 1.55:
+            dnb_bonus += 8
+        elif odds_2 < 2.4 and odds_dnb_away < 1.65:
+            dnb_bonus += 4
+
+    score += dnb_bonus
+
+    # 3) over/under pulito
     if odds_over25 and odds_under25:
         p_over = 1 / odds_over25
         p_under = 1 / odds_under25
         somma = p_over + p_under
-        if 1.01 < somma < 1.15:
-            score += 5
+        if 1.01 < somma < 1.14:
+            score += 6
+        elif 1.14 <= somma < 1.20:
+            score += 2
         else:
             score -= 5
     else:
         score -= 5
 
+    # 4) piccolo clamp finale
     return max(0, min(100, score))
+
 
 
 def compute_structure_affidability(
