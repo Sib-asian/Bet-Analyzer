@@ -993,7 +993,37 @@ st.markdown("---")
 # ============================================================
 # 0. PRENDI PARTITA DALL’API
 # ============================================================
+# ============================================================
+# 📅 PALINSESTO RAPIDO DEL GIORNO
+# ============================================================
 
+st.subheader("📅 Palinsesto rapido (tutte le partite che trovo ora)")
+
+if st.button("Genera palinsesto del giorno"):
+    # prendo tutte le leghe calcio
+    leagues = oddsapi_get_soccer_leagues()
+    all_rows = []
+
+    for lg in leagues:
+        lg_key = lg.get("key")
+        events = oddsapi_get_events_for_league(lg_key)
+        for ev in events:
+            row = valuta_evento_rapido(ev)
+            # scarto quelle senza quote significative
+            if row["confidence"] > 0:
+                row["lega"] = lg.get("title", lg_key)
+                all_rows.append(row)
+
+    if not all_rows:
+        st.warning("Nessuna partita valutabile trovata adesso.")
+    else:
+        df_pal = pd.DataFrame(all_rows).sort_values(
+            by=["confidence", "mpi"],
+            ascending=False
+        ).reset_index(drop=True)
+        st.write("Qui sotto le migliori di oggi (in alto le più 'pulite'):")
+        st.dataframe(df_pal.head(20))
+        st.info("💡 Le prime 3–4 partite sono quelle con struttura più affidabile secondo il modello.")
 st.subheader("🔍 Prendi una partita da The Odds API e riempi le quote")
 
 col_a, col_b = st.columns([1, 2])
