@@ -53,14 +53,15 @@ def oddsapi_get_soccer_leagues() -> List[dict]:
 def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
     """
     Prende gli eventi per una lega di calcio.
-    IMPORTANTE: chiediamo anche both_teams_to_score così abbiamo GG Sì/No.
+    Allargo le regioni perché con solo eu,uk spesso torna [].
     """
     try:
         r = requests.get(
             f"{THE_ODDS_BASE}/sports/{league_key}/odds",
             params={
                 "apiKey": THE_ODDS_API_KEY,
-                "regions": "eu,uk",
+                # Aggiunto US e US2 per avere più disponibilità
+                "regions": "us,us2,eu,uk",
                 "markets": "h2h,totals,spreads,both_teams_to_score",
                 "oddsFormat": "decimal",
                 "dateFormat": "iso",
@@ -68,9 +69,20 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
             timeout=8,
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+
+        # Debug utile se non arrivano eventi
+        if not isinstance(data, list):
+            print("⚠️ Risposta API inattesa:", data)
+            return []
+
+        if len(data) == 0:
+            print(f"Nessuna partita trovata per {league_key} (nessun book con odds attive).")
+
+        return data
+
     except Exception as e:
-        print("errore events:", e)
+        print("❌ Errore durante il caricamento eventi:", e)
         return []
 
 
