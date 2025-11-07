@@ -27,6 +27,10 @@ PREFERRED_BOOKS = [
     "bet365",
     "unibet_eu",
     "williamhill",
+    "marathonbet",
+    "bwin",
+    "10bet",
+    "bovada",
 ]
 
 # ============================================================
