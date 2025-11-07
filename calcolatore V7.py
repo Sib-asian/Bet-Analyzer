@@ -749,7 +749,7 @@ def compute_global_confidence(
 # ============================================================
 
 st.set_page_config(page_title="Modello Scommesse – Odds API PRO", layout="wide")
-st.title("⚽ Calcolatore AsianOdds.)
+st.title("⚽ Calcolatore AsianOdds.")
 
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
