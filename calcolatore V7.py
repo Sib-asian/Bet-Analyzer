@@ -80,7 +80,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media 1X2
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta ricavati dallo spread 0
-    Restituisce un dict compatibile col nostro modello.
     """
     out = {
         "home": event.get("home_team"),
@@ -139,22 +138,19 @@ def oddsapi_extract_prices(event: dict) -> dict:
 
             # spreads → se il point è 0 lo leggiamo come DNB
             elif mk_key == "spreads":
-                # la Odds API per spreads mette outcome per ogni team con point (+/-)
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
                     price = o.get("price")
                     name = o.get("name", "")
                     if price is None:
                         continue
-                    # vogliamo solo handicap 0
                     if point == 0 or point == 0.0:
-                        # se è il nome della squadra di casa → DNB Casa
                         if name == out["home"]:
                             dnb_home_list.append(price)
                         elif name == out["away"]:
                             dnb_away_list.append(price)
 
-    # faccio le medie
+    # medie
     if h2h_home:
         out["odds_1"] = sum(h2h_home) / len(h2h_home)
     if h2h_draw:
@@ -460,7 +456,6 @@ def risultato_completo(
     p1, px, p2 = normalize_1x2_from_odds(odds_1, odds_x, odds_2)
 
     # 2) se abbiamo DNB li traduciamo in probabilità e li fondiamo
-    # DNB ha solo 2 esiti → normalizzo
     if odds_dnb_home and odds_dnb_home > 1 and odds_dnb_away and odds_dnb_away > 1:
         pdnb_home = 1 / odds_dnb_home
         pdnb_away = 1 / odds_dnb_away
@@ -468,10 +463,8 @@ def risultato_completo(
         if tot_dnb > 0:
             pdnb_home /= tot_dnb
             pdnb_away /= tot_dnb
-            # blend: 70% 1X2 + 30% DNB
             p1 = p1 * 0.7 + pdnb_home * 0.3
             p2 = p2 * 0.7 + pdnb_away * 0.3
-            # il pareggio lo risistemo per far tornare a 1
             px = max(0.0, 1.0 - (p1 + p2))
 
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
@@ -485,7 +478,7 @@ def risultato_completo(
             w_market=0.6
         )
 
-    # rho (correlazione BTTS) – se non abbiamo quota gg usiamo fallback
+    # rho (correlazione BTTS)
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.8
@@ -614,11 +607,107 @@ def risultato_completo(
     }
 
 # ============================================================
+#   NUOVE FUNZIONI: check coerenza, market pressure, confidence
+# ============================================================
+
+def check_coerenza_quote(
+    odds_1: float,
+    odds_x: float,
+    odds_2: float,
+    odds_over25: float,
+    odds_under25: float,
+) -> List[str]:
+    """Controlli veloci per vedere se le quote hanno qualcosa di storto."""
+    warnings = []
+
+    # 1x2 base
+    if odds_1 and odds_2 and odds_1 < 1.25 and odds_2 < 5:
+        warnings.append("Casa troppo favorita ma trasferta non abbastanza alta.")
+    if odds_1 and odds_2 and odds_1 > 3.0 and odds_2 > 3.0:
+        warnings.append("Sia casa che trasferta sopra 3.0 → match molto caotico.")
+
+    # over/under
+    if odds_over25 and odds_under25:
+        # le due inverse dovrebbero sommare > 1.9 circa
+        p_over = 1 / odds_over25
+        p_under = 1 / odds_under25
+        if (p_over + p_under) < 1.7:
+            warnings.append("Mercato over/under 2.5 non sembra calibrato (somma prob < 170%).")
+        # se 1X2 è molto sbilanciato ma over/under è alto
+        if odds_1 and odds_1 < 1.5 and odds_over25 and odds_over25 > 2.2:
+            warnings.append("Favorita netta ma over 2.5 alto → controlla linea gol.")
+    else:
+        warnings.append("Manca almeno una quota Over/Under 2.5 → controlli incompleti.")
+
+    return warnings
+
+def compute_market_pressure_index(
+    odds_1: float,
+    odds_x: float,
+    odds_2: float,
+    odds_over25: float,
+    odds_under25: float,
+    odds_dnb_home: float,
+    odds_dnb_away: float,
+) -> int:
+    """
+    0–100: più alto = mercato pulito e direzionale.
+    È una cosa semplice basata su:
+    - favorito chiaro
+    - dnb che conferma
+    - over/under allineato
+    """
+    score = 50  # base
+
+    # favorito chiaro
+    if odds_1 and odds_2:
+        if odds_1 < 1.7 and odds_2 > 3.5:
+            score += 20
+        elif odds_1 < 2.0 and odds_2 > 3.0:
+            score += 10
+
+    # dnb che conferma
+    if odds_dnb_home and odds_dnb_home > 1:
+        if odds_1 and odds_1 < 2.0 and odds_dnb_home < 1.5:
+            score += 10
+    if odds_dnb_away and odds_dnb_away > 1:
+        if odds_2 and odds_2 < 2.0 and odds_dnb_away < 1.5:
+            score += 10
+
+    # over/under ragionevoli
+    if odds_over25 and odds_under25:
+        p_over = 1 / odds_over25
+        p_under = 1 / odds_under25
+        somma = p_over + p_under
+        if 1.75 <= somma <= 2.1:
+            score += 5
+    else:
+        score -= 5
+
+    return max(0, min(100, score))
+
+def compute_global_confidence(
+    base_aff: int,
+    n_warnings: int,
+    mpi: int,
+    has_xg: bool,
+) -> int:
+    """
+    mix: affidabilità tua, penalità per warning, bonus per market pressure, bonus se hai xG
+    """
+    conf = base_aff
+    conf -= n_warnings * 5
+    conf += int((mpi - 50) * 0.3)  # se mpi > 50 aggiunge, se < 50 toglie
+    if has_xg:
+        conf += 5
+    return max(0, min(100, conf))
+
+# ============================================================
 #              STREAMLIT APP
 # ============================================================
 
 st.set_page_config(page_title="Modello Scommesse – Odds API PRO", layout="wide")
-st.title("⚽ Modello Scommesse – versione con The Odds API PRO + DNB")
+st.title("⚽ Modello Scommesse – versione con The Odds API PRO + DNB + controlli")
 
 st.caption(f"Esecuzione: {datetime.now().isoformat(timespec='seconds')}")
 
@@ -642,7 +731,6 @@ if os.path.exists(ARCHIVE_FILE):
 else:
     st.info("Nessuno storico ancora.")
 
-# ===== cancellazione dallo storico =====
 st.markdown("### 🗑️ Cancella analisi dallo storico")
 if os.path.exists(ARCHIVE_FILE):
     df_del = pd.read_csv(ARCHIVE_FILE)
@@ -836,7 +924,7 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
-    # affidabilità semplice
+    # affidabilità semplice (quella che avevi)
     aff = 100
     if abs(spread_ap - spread_co) > 0.25:
         aff -= 15
@@ -849,9 +937,40 @@ if st.button("CALCOLA MODELLO"):
         aff -= 10
     aff = max(0, min(100, aff))
 
+    # 1) check coerenza quote
+    warnings = check_coerenza_quote(
+        odds_1, odds_x, odds_2,
+        odds_over25, odds_under25
+    )
+
+    # 2) market pressure index
+    mpi = compute_market_pressure_index(
+        odds_1, odds_x, odds_2,
+        odds_over25, odds_under25,
+        odds_dnb_home, odds_dnb_away
+    )
+
+    # 3) confidence globale
+    global_conf = compute_global_confidence(
+        base_aff=aff,
+        n_warnings=len(warnings),
+        mpi=mpi,
+        has_xg=has_xg
+    )
+
     st.success("Calcolo completato ✅")
     st.subheader("⭐ Sintesi Match")
-    st.write(f"Affidabilità del match: **{aff}/100**")
+    st.write(f"Affidabilità del match (struttura): **{aff}/100**")
+    st.write(f"Confidence globale: **{global_conf}/100**")
+    st.write(f"Market Pressure Index: **{mpi}/100**")
+
+    if warnings:
+        st.subheader("⚠️ Check coerenza quote")
+        for w in warnings:
+            st.write(f"- {w}")
+    else:
+        st.subheader("✅ Check coerenza quote")
+        st.write("Quote coerenti con il modello minimo.")
 
     # movimento
     delta_spread = spread_co - spread_ap
@@ -872,7 +991,7 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
-    # value finder basilare
+    # value finder
     st.subheader("💰 Value Finder")
     rows = []
     for lab, p_mod, odd in [
@@ -1002,6 +1121,8 @@ if st.button("CALCOLA MODELLO"):
         "btts": round(ris_co["btts"]*100, 2),
         "over_25": round(ris_co["over_25"]*100, 2),
         "affidabilita": aff,
+        "confidence_globale": global_conf,
+        "market_pressure_index": mpi,
         "esito_modello": max(
             [("1", ris_co["p_home"]), ("X", ris_co["p_draw"]), ("2", ris_co["p_away"])],
             key=lambda x: x[1]
