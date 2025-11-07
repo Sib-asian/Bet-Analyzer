@@ -858,7 +858,86 @@ def compute_global_confidence(
         conf += 5
     return max(0, min(100, conf))
 
+def valuta_evento_rapido(event: dict) -> dict:
+    """
+    Prende un evento grezzo della Odds API e prova a dargli un punteggio
+    usando le funzioni che abbiamo già: estrazione quote -> risultato_completo -> confidence.
+    È una versione 'light' pensata per il palinsesto.
+    """
+    prices = oddsapi_extract_prices(event)
 
+    home = prices.get("home") or event.get("home_team") or "Casa"
+    away = prices.get("away") or event.get("away_team") or "Ospite"
+    match_name = f"{home} vs {away}"
+
+    # se mancano troppe quote lo scartiamo
+    if not prices.get("odds_1") or not prices.get("odds_2"):
+        return {
+            "match": match_name,
+            "start": event.get("commence_time", ""),
+            "confidence": 0,
+            "mpi": 0,
+            "affidabilita": 0,
+            "note": "quote 1/2 mancanti",
+        }
+
+    ris = risultato_completo(
+        spread=0.0,
+        total=2.5,
+        odds_1=prices.get("odds_1"),
+        odds_x=prices.get("odds_x"),
+        odds_2=prices.get("odds_2"),
+        odds_btts=prices.get("odds_btts"),
+        odds_dnb_home=prices.get("odds_dnb_home"),
+        odds_dnb_away=prices.get("odds_dnb_away"),
+    )
+
+    warnings = check_coerenza_quote(
+        prices.get("odds_1"),
+        prices.get("odds_x"),
+        prices.get("odds_2"),
+        prices.get("odds_over25"),
+        prices.get("odds_under25"),
+    )
+    mpi = compute_market_pressure_index(
+        prices.get("odds_1"),
+        prices.get("odds_x"),
+        prices.get("odds_2"),
+        prices.get("odds_over25"),
+        prices.get("odds_under25"),
+        prices.get("odds_dnb_home"),
+        prices.get("odds_dnb_away"),
+    )
+    ent_media = (ris["ent_home"] + ris["ent_away"]) / 2
+    aff = compute_structure_affidability(
+        spread_ap=0.0,
+        spread_co=0.0,
+        total_ap=2.5,
+        total_co=2.5,
+        ent_media=ent_media,
+        has_xg=False,
+        odds_1=prices.get("odds_1"),
+        odds_x=prices.get("odds_x"),
+        odds_2=prices.get("odds_2"),
+    )
+    conf = compute_global_confidence(
+        base_aff=aff,
+        n_warnings=len(warnings),
+        mpi=mpi,
+        has_xg=False,
+    )
+
+    return {
+        "match": match_name,
+        "start": event.get("commence_time", ""),
+        "confidence": conf,
+        "mpi": mpi,
+        "affidabilita": aff,
+        "p_home": ris["p_home"] * 100,
+        "p_draw": ris["p_draw"] * 100,
+        "p_away": ris["p_away"] * 100,
+        "warnings": "; ".join(warnings),
+    }
 # ============================================================
 #              STREAMLIT APP
 # ============================================================
