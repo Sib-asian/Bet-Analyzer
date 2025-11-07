@@ -1366,9 +1366,9 @@ with st.expander("5️⃣ Clean sheet e info modello"):
     st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
     st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
     st.write(f"λ Casa: {ris_co['lambda_home']:.3f}")
-        st.write(f"λ Trasferta: {ris_co['lambda_away']:.3f}")
-        st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
-        st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
+    st.write(f"λ Trasferta: {ris_co['lambda_away']:.3f}")
+    st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
+    st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
 
     with st.expander("6️⃣ Multigol Casa"):
         st.write({k: f"{v*100:.1f}%" for k, v in ris_co["multigol_home"].items()})
