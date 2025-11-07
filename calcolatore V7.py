@@ -103,7 +103,9 @@ def oddsapi_extract_prices(event: dict) -> dict:
     Da 1 evento della Odds API estrae:
     - media 1X2
     - media Over/Under 2.5
-    - DNB Casa / DNB Trasferta ricavati dallo spread 0
+    - DNB Casa / DNB Trasferta:
+        1) prova a leggerli dal mercato 'draw_no_bet' (se API premium li dà)
+        2) altrimenti li ricava dallo spread 0
     - quota GG (BTTS yes) se presente
     """
     out = {
@@ -163,7 +165,19 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif "under" in name:
                             under25_list.append(price)
 
-            # spreads → se il point è 0 lo leggiamo come DNB
+            # 1) DNB ufficiale (mercato dedicato)
+            elif mk_key in ["draw_no_bet", "dnb"]:
+                for o in mk.get("outcomes", []):
+                    name = o.get("name", "")
+                    price = o.get("price")
+                    if price is None:
+                        continue
+                    if name == out["home"]:
+                        dnb_home_list.append(price)
+                    elif name == out["away"]:
+                        dnb_away_list.append(price)
+
+            # 2) fallback: spreads → se il point è 0 lo leggiamo come DNB
             elif mk_key == "spreads":
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
@@ -171,7 +185,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     name = o.get("name", "")
                     if price is None:
                         continue
-                    if point == 0:
+                    if point == 0 or point == 0.0:
                         if name == out["home"]:
                             dnb_home_list.append(price)
                         elif name == out["away"]:
