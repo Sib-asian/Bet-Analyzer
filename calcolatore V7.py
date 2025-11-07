@@ -1328,9 +1328,9 @@ df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ +2 punti %
 st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
 
-    df_vf = pd.DataFrame(rows)
-    df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]  # mostra solo value >= 2pp
-    st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
+df_vf = pd.DataFrame(rows)
+df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]  # mostra solo value >= 2pp
+st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
 # espansioni
 with st.expander("① Probabilità principali"):
