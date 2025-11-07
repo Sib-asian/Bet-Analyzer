@@ -1332,40 +1332,40 @@ st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
     df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]  # mostra solo value >= 2pp
     st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
-    # espansioni
-    with st.expander("① Probabilità principali"):
-        st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
-        st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
-        st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
+# espansioni
+with st.expander("① Probabilità principali"):
+    st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
+    st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
+    st.write(f"GG + Over 2.5: {ris_co['gg_over25']*100:.1f}%")
 
-    with st.expander("② Esito finale e parziale"):
-        st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
-        st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
-        st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
-        st.write("Double Chance:")
-        for k, v in ris_co["dc"].items():
-            st.write(f"- {k}: {v*100:.1f}%")
+with st.expander("② Esito finale e parziale"):
+    st.write(f"Vittoria Casa: {ris_co['p_home']*100:.1f}% (apertura {ris_ap['p_home']*100:.1f}%)")
+    st.write(f"Pareggio: {ris_co['p_draw']*100:.1f}% (apertura {ris_ap['p_draw']*100:.1f}%)")
+    st.write(f"Vittoria Trasferta: {ris_co['p_away']*100:.1f}% (apertura {ris_ap['p_away']*100:.1f}%)")
+    st.write("Double Chance:")
+    for k, v in ris_co["dc"].items():
+        st.write(f"- {k}: {v*100:.1f}%")
 
-    with st.expander("③ Over / Under"):
-        st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
-        st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
-        st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
-        st.write(f"Under 2.5: {ris_co['under_25']*100:.1f}%")
-        st.write(f"Over 3.5: {ris_co['over_35']*100:.1f}%")
-        st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
-        st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
+with st.expander("③ Over / Under"):
+    st.write(f"Over 1.5: {ris_co['over_15']*100:.1f}%")
+    st.write(f"Under 1.5: {ris_co['under_15']*100:.1f}%")
+    st.write(f"Over 2.5: {ris_co['over_25']*100:.1f}%")
+    st.write(f"Under 2.5: {ris_co['under_25']*100:.1f}%")
+    st.write(f"Over 3.5: {ris_co['over_35']*100:.1f}%")
+    st.write(f"Under 3.5: {ris_co['under_35']*100:.1f}%")
+    st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
 
-    with st.expander("④ Gol pari/dispari"):
-        st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
-        st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
-        st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
-        st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
+with st.expander("④ Gol pari/dispari"):
+    st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
+    st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
+    st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
+    st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
 
-    with st.expander("5️⃣ Clean sheet e info modello"):
-        st.write(f"Clean Sheet Casa: {ris_co['cs_home']*100:.1f}%")
-        st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
-        st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
-        st.write(f"λ Casa: {ris_co['lambda_home']:.3f}")
+with st.expander("5️⃣ Clean sheet e info modello"):
+    st.write(f"Clean Sheet Casa: {ris_co['cs_home']*100:.1f}%")
+    st.write(f"Clean Sheet Trasferta: {ris_co['cs_away']*100:.1f}%")
+    st.write(f"Clean Sheet qualcuno (No Goal): {ris_co['clean_sheet_qualcuno']*100:.1f}%")
+    st.write(f"λ Casa: {ris_co['lambda_home']:.3f}")
         st.write(f"λ Trasferta: {ris_co['lambda_away']:.3f}")
         st.write(f"Entropia Casa: {ris_co['ent_home']:.3f}")
         st.write(f"Entropia Trasferta: {ris_co['ent_away']:.3f}")
