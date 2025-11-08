@@ -119,6 +119,10 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         return []
 
 
+# ============================================================
+#   FUNZIONE CORRETTA PER ESTRARRE LE QUOTE
+# ============================================================
+
 def oddsapi_extract_prices(event: dict) -> dict:
     """
     Da 1 evento della Odds API estrae:
@@ -126,11 +130,13 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta
     - quota GG (BTTS yes) se presente
-    Con pesi: Pinnacle e Bet365 pesano di più
-    Con filtro outlier per eliminare valori troppo distanti
+
+    Con pesi: Pinnacle e Bet365 pesano di più.
+    Riconosce i nomi reali delle squadre.
+    Fa fallback DNB dallo spread 0.
+    Pulisce gli outlier.
     """
 
-    # ⚖️ PESI PER BOOKMAKER (più alto = più influenza)
     WEIGHTS = {
         "pinnacle": 1.6,
         "bet365": 1.4,
@@ -143,9 +149,14 @@ def oddsapi_extract_prices(event: dict) -> dict:
         "bovada": 0.8,
     }
 
+    home_team = (event.get("home_team") or "home").strip()
+    away_team = (event.get("away_team") or "away").strip()
+    home_l = home_team.lower()
+    away_l = away_team.lower()
+
     out = {
-        "home": event.get("home_team"),
-        "away": event.get("away_team"),
+        "home": home_team,
+        "away": away_team,
         "odds_1": None,
         "odds_x": None,
         "odds_2": None,
@@ -160,13 +171,12 @@ def oddsapi_extract_prices(event: dict) -> dict:
     if not bookmakers:
         return out
 
-    # 🔧 liste di tuple (prezzo, peso)
+    # liste di tuple (prezzo, peso)
     h2h_home, h2h_draw, h2h_away = [], [], []
     over25_list, under25_list = [], []
     dnb_home_list, dnb_away_list = [], []
     btts_list = []
 
-    # 📊 RACCOLTA QUOTE
     for bk in bookmakers:
         bk_key = bk.get("key")
         if bk_key not in WEIGHTS:
@@ -176,56 +186,79 @@ def oddsapi_extract_prices(event: dict) -> dict:
         for mk in bk.get("markets", []):
             mk_key = mk.get("key", "").lower()
 
-            # 1X2
-            if mk_key == "h2h":
+            # ===== 1X2 =====
+            if (
+                "h2h" in mk_key
+                or "head_to_head" in mk_key
+                or "match_winner" in mk_key
+                or mk_key == "h2h"
+            ):
                 for o in mk.get("outcomes", []):
-                    name = o.get("name", "").lower()
+                    name = (o.get("name") or "").strip()
+                    name_l = name.lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    if "home" in name:
+
+                    if name_l == home_l or home_l in name_l:
                         h2h_home.append((price, w))
-                    elif "away" in name:
+                    elif name_l == away_l or away_l in name_l:
                         h2h_away.append((price, w))
-                    elif "draw" in name:
+                    elif name_l in ["draw", "tie", "x", "pareggio"]:
                         h2h_draw.append((price, w))
 
-            # Over/Under 2.5
-            elif mk_key == "totals":
+            # ===== TOTALS → 2.5 =====
+            elif "totals" in mk_key or "total" in mk_key:
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
                     price = o.get("price")
-                    name = o.get("name", "").lower()
-                    if point == 2.5 and price:
-                        if "over" in name:
+                    name_l = (o.get("name") or "").lower()
+                    if price is None:
+                        continue
+                    if point == 2.5:
+                        if "over" in name_l:
                             over25_list.append((price, w))
-                        elif "under" in name:
+                        elif "under" in name_l:
                             under25_list.append((price, w))
 
-            # DNB (draw no bet)
-            elif mk_key in ["draw_no_bet", "draw_no_bet_home", "draw_no_bet_away"]:
+            # ===== DNB ufficiale =====
+            elif "draw_no_bet" in mk_key or mk_key == "dnb":
                 for o in mk.get("outcomes", []):
-                    name = o.get("name", "").lower()
+                    name_l = (o.get("name") or "").lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    if "home" in name:
+                    if name_l == home_l or home_l in name_l:
                         dnb_home_list.append((price, w))
-                    elif "away" in name:
+                    elif name_l == away_l or away_l in name_l:
                         dnb_away_list.append((price, w))
 
-            # BTTS (entrambe segnano)
-            elif "btts" in mk_key or "both_teams" in mk_key:
+            # ===== fallback: spread 0 → DNB =====
+            elif mk_key == "spreads":
                 for o in mk.get("outcomes", []):
-                    name = o.get("name", "").lower()
+                    point = o.get("point")
+                    price = o.get("price")
+                    name_l = (o.get("name") or "").lower()
+                    if price is None:
+                        continue
+                    if point == 0 or point == 0.0:
+                        if name_l == home_l or home_l in name_l:
+                            dnb_home_list.append((price, w))
+                        elif name_l == away_l or away_l in name_l:
+                            dnb_away_list.append((price, w))
+
+            # ===== BTTS =====
+            elif "btts" in mk_key or "both_teams_to_score" in mk_key:
+                for o in mk.get("outcomes", []):
+                    name_l = (o.get("name") or "").lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    if "yes" in name or "sì" in name:
+                    if "yes" in name_l or "sì" in name_l or "si" in name_l:
                         btts_list.append((price, w))
 
-    # 🧹 FILTRO OUTLIER (rimuove prezzi troppo distanti)
-    def _trim_outliers(values, tol=0.10):
+    # pulizia outlier sulle liste pesate
+    def _trim_outliers(values: List[Tuple[float, float]], tol: float = 0.10):
         if len(values) <= 2:
             return values
         avg = sum(v for v, _ in values) / len(values)
@@ -241,8 +274,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
     dnb_away_list = _trim_outliers(dnb_away_list)
     btts_list = _trim_outliers(btts_list)
 
-    # 🧮 MEDIA PESATA
-    def weighted_avg(values):
+    def weighted_avg(values: List[Tuple[float, float]]):
         if not values:
             return None
         num = sum(v * w for v, w in values)
@@ -874,7 +906,6 @@ def compute_global_confidence(
 def valuta_evento_rapido(event: dict) -> dict:
     """
     Valutazione "light" per palinsesto.
-    Filtra anche partite non di oggi.
     """
     prices = oddsapi_extract_prices(event)
 
@@ -882,31 +913,7 @@ def valuta_evento_rapido(event: dict) -> dict:
     away = prices.get("away") or event.get("away_team") or "Ospite"
     match_name = f"{home} vs {away}"
 
-    # filtro per oggi
-    start_raw = event.get("commence_time")
-    if not start_raw:
-        return {
-            "match": match_name,
-            "start": "",
-            "confidence": 0,
-            "mpi": 0,
-            "affidabilita": 0,
-            "warnings": "manca data",
-        }
-    try:
-        dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
-        if dt_utc.date() != date.today():
-            return {
-                "match": match_name,
-                "start": start_raw,
-                "confidence": 0,
-                "mpi": 0,
-                "affidabilita": 0,
-                "warnings": "non è oggi",
-            }
-    except Exception:
-        pass
-
+    # se non ho quote principali non valuto
     if not prices.get("odds_1") or not prices.get("odds_2"):
         return {
             "match": match_name,
@@ -1042,14 +1049,17 @@ if st.button("Genera palinsesto del giorno"):
         lg_key = lg.get("key")
         events = oddsapi_get_events_for_league(lg_key)
         for ev in events:
+            # filtro per OGGI
             start_raw = ev.get("commence_time")
             if not start_raw:
                 continue
+            # la API di solito dà tipo 2025-11-08T12:00:00Z
             try:
                 dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
                 if dt_utc.date().isoformat() != today_iso:
                     continue
             except Exception:
+                # se non riesco a fare il parse la salto
                 continue
 
             row = valuta_evento_rapido(ev)
