@@ -778,7 +778,13 @@ cover_0_3 = sum(dist_tot_ft[i] for i in range(0, min(4, len(dist_tot_ft))))
         "ent_away": ent_away,
         "odds_prob": odds_prob,
         "scost": scost,
+            # nuove metriche statistiche globali
+        "odd_mass": odd_mass,
+        "even_mass2": even_mass2,
+        "cover_0_2": cover_0_2,
+        "cover_0_3": cover_0_3,
     }
+    
 
 # ============================================================
 #   NUOVE FUNZIONI: check coerenza, market pressure, confidence
@@ -1481,6 +1487,13 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
+    # nuovo expander: statistiche globali di copertura e pari/dispari robusto
+    with st.expander("⑬ Statistiche globali (pari/dispari + coperture)"):
+        st.write(f"Somma gol DISPARI (robusta): {ris_co['odd_mass']*100:.1f}%")
+        st.write(f"Somma gol PARI (robusta): {ris_co['even_mass2']*100:.1f}%")
+        st.write(f"Copertura 0-2 gol (FT): {ris_co['cover_0_2']*100:.1f}%")
+        st.write(f"Copertura 0-3 gol (FT): {ris_co['cover_0_3']*100:.1f}%")
+        st.caption("Queste usano la distribuzione aggregata dei gol (casa+ospite), quindi sono meno soggette alla piccola distorsione del modello.")
     # salvataggio nel CSV
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
