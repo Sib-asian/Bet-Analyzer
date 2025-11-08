@@ -473,15 +473,20 @@ def dist_gol_da_matrice(mat: List[List[float]]):
             dh[h] += p
             da[a] += p
     return dh, da
+
+
 def dist_gol_totali_from_matrix(mat: List[List[float]]) -> List[float]:
+    """Distribuzione dei gol totali (0,1,2,3,...) partendo dalla matrice punteggi."""
     mg = len(mat) - 1
-    # massimo totale possibile = 2*mg
-    dist = [0.0] * (2 * mg + 1)
+    # massimo gol totali che possiamo fare con la matrice
+    max_tot = mg * 2
+    dist = [0.0] * (max_tot + 1)
     for h in range(mg + 1):
         for a in range(mg + 1):
             tot = h + a
             dist[tot] += mat[h][a]
     return dist
+
 
 def prob_multigol_from_dist(dist: List[float], gmin: int, gmax: int) -> float:
     s = 0.0
@@ -656,6 +661,7 @@ def risultato_completo(
     ratio_ht = max(0.35, min(0.55, ratio_ht))
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
+    # probabilità base
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
@@ -664,127 +670,135 @@ def risultato_completo(
     btts = calc_bt_ts_from_matrix(mat_ft)
     gg_over25 = calc_gg_over25_from_matrix(mat_ft)
 
+    # pari dispari “classico”
     even_ft, odd_ft = prob_pari_dispari_from_matrix(mat_ft)
     even_ht, odd_ht = prob_pari_dispari_from_matrix(mat_ht)
 
+    # clean sheet
     cs_home, cs_away = prob_clean_sheet_from_matrix(mat_ft)
     clean_sheet_qualcuno = 1 - btts
 
+    # distribuzioni gol separati
     dist_home_ft, dist_away_ft = dist_gol_da_matrice(mat_ft)
     dist_home_ht, dist_away_ht = dist_gol_da_matrice(mat_ht)
 
-dist_tot_ft = dist_gol_totali_from_matrix(mat_ft)
+    # distribuzione gol totali FT
+    dist_tot_ft = dist_gol_totali_from_matrix(mat_ft)
 
-# versione pari/dispari ricavata dalla distribuzione
-odd_mass = sum(p for i, p in enumerate(dist_tot_ft) if i % 2 == 1)
-even_mass2 = 1 - odd_mass
+    # versione pari/dispari ricavata dalla distribuzione gol totali
+    odd_mass = sum(p for i, p in enumerate(dist_tot_ft) if i % 2 == 1)
+    even_mass2 = 1 - odd_mass
 
-# coperture di utilità
-cover_0_2 = sum(dist_tot_ft[i] for i in range(0, min(3, len(dist_tot_ft))))
-cover_0_3 = sum(dist_tot_ft[i] for i in range(0, min(4, len(dist_tot_ft))))
-ranges = [(0,1),(1,3),(1,4),(1,5),(2,3),(2,4),(2,5),(3,5)]
-multigol_home = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ft, a, b) for a,b in ranges}
-multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b in ranges}
-multigol_home_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ht, a, b) for a,b in ranges}
-multigol_away_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ht, a, b) for a,b in ranges}
+    # coperture di utilità
+    cover_0_2 = sum(dist_tot_ft[i] for i in range(0, min(3, len(dist_tot_ft))))
+    cover_0_3 = sum(dist_tot_ft[i] for i in range(0, min(4, len(dist_tot_ft))))
 
-combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
-combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
+    # multigol per range standard
+    ranges = [(0,1),(1,3),(1,4),(1,5),(2,3),(2,4),(2,5),(3,5)]
+    multigol_home = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ft, a, b) for a,b in ranges}
+    multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b in ranges}
+    multigol_home_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ht, a, b) for a,b in ranges}
+    multigol_away_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ht, a, b) for a,b in ranges}
 
-dc = {
-    "DC Casa o Pareggio": p_home + p_draw,
-    "DC Trasferta o Pareggio": p_away + p_draw,
-    "DC Casa o Trasferta": p_home + p_away
-}
+    combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
+    combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
 
-mg = len(mat_ft) - 1
-marg2 = marg3 = 0.0
-for h in range(mg + 1):
-    for a in range(mg + 1):
-        p = mat_ft[h][a]
-        if h - a >= 2:
-            marg2 += p
-        if h - a >= 3:
-            marg3 += p
+    dc = {
+        "DC Casa o Pareggio": p_home + p_draw,
+        "DC Trasferta o Pareggio": p_away + p_draw,
+        "DC Casa o Trasferta": p_home + p_away
+    }
 
-combo_book = {
-    "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
-    "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
-    "2 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '2', 1.5),
-    "2 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '2', 2.5),
-    "1X & Over 1.5": prob_dc_over_from_matrix(mat_ft, '1X', 1.5),
-    "X2 & Over 1.5": prob_dc_over_from_matrix(mat_ft, 'X2', 1.5),
-    "1X & Over 2.5": prob_dc_over_from_matrix(mat_ft, '1X', 2.5),
-    "X2 & Over 2.5": prob_dc_over_from_matrix(mat_ft, 'X2', 2.5),
-    "1X & BTTS": prob_dc_btts_from_matrix(mat_ft, '1X'),
-    "X2 & BTTS": prob_dc_btts_from_matrix(mat_ft, 'X2'),
-    "1 & BTTS": prob_esito_btts_from_matrix(mat_ft, '1'),
-    "2 & BTTS": prob_esito_btts_from_matrix(mat_ft, '2'),
-}
+    # margini vittoria
+    mg = len(mat_ft) - 1
+    marg2 = marg3 = 0.0
+    for h in range(mg + 1):
+        for a in range(mg + 1):
+            p = mat_ft[h][a]
+            if h - a >= 2:
+                marg2 += p
+            if h - a >= 3:
+                marg3 += p
 
-combo_ht_ft = combo_over_ht_ft(lh, la)
-top10 = top_results_from_matrix(mat_ft, 10, 0.005)
+    # combo mercati
+    combo_book = {
+        "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
+        "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
+        "2 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '2', 1.5),
+        "2 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '2', 2.5),
+        "1X & Over 1.5": prob_dc_over_from_matrix(mat_ft, '1X', 1.5),
+        "X2 & Over 1.5": prob_dc_over_from_matrix(mat_ft, 'X2', 1.5),
+        "1X & Over 2.5": prob_dc_over_from_matrix(mat_ft, '1X', 2.5),
+        "X2 & Over 2.5": prob_dc_over_from_matrix(mat_ft, 'X2', 2.5),
+        "1X & BTTS": prob_dc_btts_from_matrix(mat_ft, '1X'),
+        "X2 & BTTS": prob_dc_btts_from_matrix(mat_ft, 'X2'),
+        "1 & BTTS": prob_esito_btts_from_matrix(mat_ft, '1'),
+        "2 & BTTS": prob_esito_btts_from_matrix(mat_ft, '2'),
+    }
 
-ent_home = entropia_poisson(lh)
-ent_away = entropia_poisson(la)
+    combo_ht_ft = combo_over_ht_ft(lh, la)
+    top10 = top_results_from_matrix(mat_ft, 10, 0.005)
 
-odds_prob = {
-    "1": decimali_a_prob(odds_1),
-    "X": decimali_a_prob(odds_x),
-    "2": decimali_a_prob(odds_2)
-}
-scost = {
-    "1": (p_home - odds_prob["1"]) * 100,
-    "X": (p_draw - odds_prob["X"]) * 100,
-    "2": (p_away - odds_prob["2"]) * 100
-}
+    ent_home = entropia_poisson(lh)
+    ent_away = entropia_poisson(la)
 
- return {
-    "lambda_home": lh,
-    "lambda_away": la,
-    "rho": rho,
-    "p_home": p_home,
-    "p_draw": p_draw,
-    "p_away": p_away,
-    "over_15": over_15,
-    "under_15": under_15,
-    "over_25": over_25,
-    "under_25": under_25,
-    "over_35": over_35,
-    "under_35": under_35,
-    "over_05_ht": over_05_ht,
-    "btts": btts,
-    "gg_over25": gg_over25,
-    "even_ft": even_ft,
-    "odd_ft": odd_ft,
-    "even_ht": even_ht,
-    "odd_ht": odd_ht,
-    "cs_home": cs_home,
-    "cs_away": cs_away,
-    "clean_sheet_qualcuno": clean_sheet_qualcuno,
-    "multigol_home": multigol_home,
-    "multigol_away": multigol_away,
-    "multigol_home_ht": multigol_home_ht,
-    "multigol_away_ht": multigol_away_ht,
-    "dc": dc,
-    "marg2": marg2,
-    "marg3": marg3,
-    "combo_ft_filtrate": combo_ft_filtrate,
-    "combo_ht_filtrate": combo_ht_filtrate,
-    "combo_book": combo_book,
-    "combo_ht_ft": combo_ht_ft,
-    "top10": top10,
-    "ent_home": ent_home,
-    "ent_away": ent_away,
-    "odds_prob": odds_prob,
-    "scost": scost,
-    # nuove metriche statistiche globali
-    "odd_mass": odd_mass,
-    "even_mass2": even_mass2,
-    "cover_0_2": cover_0_2,
-    "cover_0_3": cover_0_3,
-}
+    odds_prob = {
+        "1": decimali_a_prob(odds_1),
+        "X": decimali_a_prob(odds_x),
+        "2": decimali_a_prob(odds_2)
+    }
+    scost = {
+        "1": (p_home - odds_prob["1"]) * 100,
+        "X": (p_draw - odds_prob["X"]) * 100,
+        "2": (p_away - odds_prob["2"]) * 100
+    }
 
+    return {
+        "lambda_home": lh,
+        "lambda_away": la,
+        "rho": rho,
+        "p_home": p_home,
+        "p_draw": p_draw,
+        "p_away": p_away,
+        "over_15": over_15,
+        "under_15": under_15,
+        "over_25": over_25,
+        "under_25": under_25,
+        "over_35": over_35,
+        "under_35": under_35,
+        "over_05_ht": over_05_ht,
+        "btts": btts,
+        "gg_over25": gg_over25,
+        "even_ft": even_ft,
+        "odd_ft": odd_ft,
+        "even_ht": even_ht,
+        "odd_ht": odd_ht,
+        "cs_home": cs_home,
+        "cs_away": cs_away,
+        "clean_sheet_qualcuno": clean_sheet_qualcuno,
+        "multigol_home": multigol_home,
+        "multigol_away": multigol_away,
+        "multigol_home_ht": multigol_home_ht,
+        "multigol_away_ht": multigol_away_ht,
+        "dc": dc,
+        "marg2": marg2,
+        "marg3": marg3,
+        "combo_ft_filtrate": combo_ft_filtrate,
+        "combo_ht_filtrate": combo_ht_filtrate,
+        "combo_book": combo_book,
+        "combo_ht_ft": combo_ht_ft,
+        "top10": top10,
+        "ent_home": ent_home,
+        "ent_away": ent_away,
+        "odds_prob": odds_prob,
+        "scost": scost,
+
+        # nuove metriche statistiche globali
+        "odd_mass": odd_mass,
+        "even_mass2": even_mass2,
+        "cover_0_2": cover_0_2,
+        "cover_0_3": cover_0_3,
+    }
 
 # ============================================================
 #   NUOVE FUNZIONI: check coerenza, market pressure, confidence
@@ -1173,6 +1187,7 @@ with col_ap2:
 st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
+
 # 🛠 Correzione automatica DNB se mancanti (partendo dall'1X2)
 odds1_tmp = api_prices.get("odds_1")
 oddsx_tmp = api_prices.get("odds_x")
@@ -1188,7 +1203,6 @@ def _safe_div(a, b):
 if (not api_prices.get("odds_dnb_home")) and odds1_tmp and oddsx_tmp:
     dnb_home_calc = _safe_div(odds1_tmp * oddsx_tmp, (odds1_tmp + oddsx_tmp))
     if dnb_home_calc:
-        # leggero margine per avvicinarci ai book
         api_prices["odds_dnb_home"] = round(dnb_home_calc * 0.995, 3)
 
 # DNB TRASFERTA = quota 2 * quota X / (quota 2 + quota X)
@@ -1196,6 +1210,7 @@ if (not api_prices.get("odds_dnb_away")) and odds2_tmp and oddsx_tmp:
     dnb_away_calc = _safe_div(odds2_tmp * oddsx_tmp, (odds2_tmp + oddsx_tmp))
     if dnb_away_calc:
         api_prices["odds_dnb_away"] = round(dnb_away_calc * 0.995, 3)
+
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
@@ -1447,8 +1462,8 @@ if st.button("CALCOLA MODELLO"):
         st.write(f"Over 0.5 HT: {ris_co['over_05_ht']*100:.1f}%")
 
     with st.expander("④ Gol pari/dispari"):
-        st.write(f"Gol pari FT: {ris_co['even_ft']*100:.1f}%")
-        st.write(f"Gol dispari FT: {ris_co['odd_ft']*100:.1f}%")
+        st.write(f"Gol pari FT (classico): {ris_co['even_ft']*100:.1f}%")
+        st.write(f"Gol dispari FT (classico): {ris_co['odd_ft']*100:.1f}%")
         st.write(f"Gol pari HT: {ris_co['even_ht']*100:.1f}%")
         st.write(f"Gol dispari HT: {ris_co['odd_ht']*100:.1f}%")
 
@@ -1487,13 +1502,14 @@ if st.button("CALCOLA MODELLO"):
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # nuovo expander: statistiche globali di copertura e pari/dispari robusto
-    with st.expander("⑬ Statistiche globali (pari/dispari + coperture)"):
+    # nuovo expander: statistiche globali (pari/dispari robusto e coperture)
+    with st.expander("⑬ Statistiche globali (pari/dispari & coperture)"):
         st.write(f"Somma gol DISPARI (robusta): {ris_co['odd_mass']*100:.1f}%")
         st.write(f"Somma gol PARI (robusta): {ris_co['even_mass2']*100:.1f}%")
-        st.write(f"Copertura 0-2 gol (FT): {ris_co['cover_0_2']*100:.1f}%")
-        st.write(f"Copertura 0-3 gol (FT): {ris_co['cover_0_3']*100:.1f}%")
-        st.caption("Queste usano la distribuzione aggregata dei gol (casa+ospite), quindi sono meno soggette alla piccola distorsione del modello.")
+        st.write(f"Copertura 0–2 gol (FT): {ris_co['cover_0_2']*100:.1f}%")
+        st.write(f"Copertura 0–3 gol (FT): {ris_co['cover_0_3']*100:.1f}%")
+        st.caption("Queste usano la distribuzione dei gol totali, quindi sono un po’ più stabili.")
+
     # salvataggio nel CSV
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -1526,6 +1542,11 @@ if st.button("CALCOLA MODELLO"):
         "esito_reale": "",
         "risultato_reale": "",
         "match_ok": "",
+        # salviamo anche le nuove
+        "odd_mass": round(ris_co["odd_mass"]*100, 2),
+        "even_mass2": round(ris_co["even_mass2"]*100, 2),
+        "cover_0_2": round(ris_co["cover_0_2"]*100, 2),
+        "cover_0_3": round(ris_co["cover_0_3"]*100, 2),
     }
 
     try:
