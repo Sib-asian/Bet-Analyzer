@@ -1188,6 +1188,16 @@ st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
 
+# fallback BTTS: se l'API non l'ha dato, uso il modello più avanti
+# ma devo già preparare un valore qui perché i number_input lo usano ora
+fallback_btts = api_prices.get("odds_btts")
+
+# se manca o è 0, metto un placeholder provvisorio (verrà ricalcolato dopo)
+if not fallback_btts or fallback_btts <= 1.01:
+    # metto un valore "normale" per far vedere qualcosa nel form
+    # (1.90 è un valore medio da mercato)
+    api_prices["odds_btts"] = 1.90
+
 # 🛠 Correzione automatica DNB se mancanti (partendo dall'1X2)
 odds1_tmp = api_prices.get("odds_1")
 oddsx_tmp = api_prices.get("odds_x")
