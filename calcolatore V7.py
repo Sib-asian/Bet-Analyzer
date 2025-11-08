@@ -673,6 +673,15 @@ def risultato_completo(
     dist_home_ft, dist_away_ft = dist_gol_da_matrice(mat_ft)
     dist_home_ht, dist_away_ht = dist_gol_da_matrice(mat_ht)
 
+dist_tot_ft = dist_gol_totali_from_matrix(mat_ft)
+
+# versione pari/dispari ricavata dalla distribuzione
+odd_mass = sum(p for i, p in enumerate(dist_tot_ft) if i % 2 == 1)
+even_mass2 = 1 - odd_mass
+
+# coperture di utilità
+cover_0_2 = sum(dist_tot_ft[i] for i in range(0, min(3, len(dist_tot_ft))))
+cover_0_3 = sum(dist_tot_ft[i] for i in range(0, min(4, len(dist_tot_ft))))
     ranges = [(0,1),(1,3),(1,4),(1,5),(2,3),(2,4),(2,5),(3,5)]
     multigol_home = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ft, a, b) for a,b in ranges}
     multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b in ranges}
