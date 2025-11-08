@@ -1315,6 +1315,15 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
+  # --- Fallback quota GG se l'API non l'ha data ---
+if not odds_btts or odds_btts <= 1.01:
+    # prendo la probabilità GG dal modello
+    p_gg_modello = ris_co["btts"]  # è un numero tra 0 e 1
+    if p_gg_modello and p_gg_modello > 0:
+        quota_gg_modello = 1 / p_gg_modello
+        # leggero margine per non essere troppo aggressivi
+        odds_btts = round(quota_gg_modello * 0.99, 3)
+  
     ent_media = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
 
     warnings = check_coerenza_quote(
