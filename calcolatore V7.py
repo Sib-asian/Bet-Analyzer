@@ -20,30 +20,12 @@ API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 
 ARCHIVE_FILE = "storico_analisi.csv"
 
-# book affidabili da mediare
-PREFERRED_BOOKS = [
-    "pinnacle",
-    "betonlineag",
-    "bet365",
-    "unibet_eu",
-    "williamhill",
-    "marathonbet",
-    "bwin",
-    "10bet",
-    "bovada",
-]
-
 # ============================================================
-#       FUNZIONI DI SUPPORTO
+#             UTILS
 # ============================================================
 
-def _clean_prices(values: List[float], tol: float = 0.25) -> List[float]:
-    if not values:
-        return values
-    avg = sum(values) / len(values)
-    low = avg * (1 - tol)
-    high = avg * (1 + tol)
-    return [v for v in values if low <= v <= high]
+def normalize_key(s: str) -> str:
+    return (s or "").lower().replace(" ", "").replace("-", "").replace("/", "")
 
 # ============================================================
 #         FUNZIONI THE ODDS API
@@ -101,9 +83,6 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         return []
 
 def oddsapi_refresh_event(league_key: str, event_id: str) -> dict:
-    """
-    Ricarica SOLO le quote di un evento già selezionato.
-    """
     if not league_key or not event_id:
         return {}
     url = f"{THE_ODDS_BASE}/sports/{league_key}/events/{event_id}/odds"
@@ -237,7 +216,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif "under" in name_l:
                             under25_list.append((price, w))
 
-            # DNB vero
+            # DNB
             elif "draw_no_bet" in mk_key or mk_key == "dnb":
                 for o in mk.get("outcomes", []):
                     name_l = (o.get("name") or "").lower()
@@ -306,7 +285,6 @@ def oddsapi_extract_prices(event: dict) -> dict:
     out["odds_dnb_away"] = weighted_avg(dnb_away_list)
     out["odds_btts"] = weighted_avg(btts_list)
 
-    # se non c'è BTTS dall'API, lo stimiamo noi
     if out["odds_btts"] is None:
         out["odds_btts"] = estimate_btts_from_basic_odds(
             odds_1=out["odds_1"],
@@ -992,11 +970,16 @@ if "selected_league_key" not in st.session_state:
     st.session_state.selected_league_key = None
 if "selected_event_id" not in st.session_state:
     st.session_state.selected_event_id = None
-# per mostrare il messaggio persistente dopo il refresh
+# questo è il suffix STABILE per i widget
+if "selected_event_key" not in st.session_state:
+    st.session_state.selected_event_key = "match"
+# per messaggio di refresh
 if "refresh_done" not in st.session_state:
     st.session_state.refresh_done = False
 if "last_refresh_ts" not in st.session_state:
     st.session_state.last_refresh_ts = None
+if "last_refresh_diffs" not in st.session_state:
+    st.session_state.last_refresh_diffs = []
 
 # ============================================================
 #               SEZIONE STORICO + CANCELLA
@@ -1113,21 +1096,30 @@ if st.session_state.soccer_leagues:
         idx = match_labels.index(selected_match_label)
         event = st.session_state.events_for_league[idx]
 
-        # salva dati per refresh
+        # salvo lega
         st.session_state.selected_league_key = selected_league_key
+
+        # provo a prendere un id stabile
         event_id = event.get("id") or event.get("event_id") or event.get("key")
+        home_n = event.get("home_team") or ""
+        away_n = event.get("away_team") or ""
+        if event_id:
+            event_key = str(event_id)
+        else:
+            event_key = f"{normalize_key(home_n)}_{normalize_key(away_n)}"
+
         st.session_state.selected_event_id = event_id
+        st.session_state.selected_event_key = event_key
 
         prices = oddsapi_extract_prices(event)
         st.session_state.selected_event_prices = prices
         st.success("Quote prese dall’API e precompilate più sotto ✅")
 
-        # se ho fatto un refresh precedente mostro il messaggio
+        # se refresh precedente
         if st.session_state.get("refresh_done"):
             st.success("Quote aggiornate dalla API ✅")
             st.session_state.refresh_done = False
 
-        # mostro anche l’ora dell’ultimo refresh se c'è
         if st.session_state.get("last_refresh_ts"):
             st.caption(f"🕓 Ultimo refresh quote: {st.session_state.last_refresh_ts}")
 
@@ -1138,11 +1130,9 @@ if st.session_state.soccer_leagues:
                 st.session_state.selected_event_id
             )
             if ref_ev:
-                # quote precedenti (per diff)
                 old_prices = st.session_state.get("selected_event_prices", {})
                 new_prices = oddsapi_extract_prices(ref_ev)
 
-                # diff tra prima e dopo
                 diffs = []
                 for k in ["odds_1", "odds_x", "odds_2", "odds_over25", "odds_under25", "odds_btts"]:
                     ov = old_prices.get(k)
@@ -1152,37 +1142,31 @@ if st.session_state.soccer_leagues:
 
                 st.session_state.selected_event_prices = new_prices
 
-                # ricostruisco il suffix in base alle squadre
-                match_suffix_refresh = f"{new_prices.get('home','')}_{new_prices.get('away','')}"
-
-                # cancello i widget che contenevano i vecchi valori
+                # cancello i widget riferiti a questo evento usando la chiave STABILE
+                ek = st.session_state.selected_event_key
                 for k in [
-                    f"spread_co_{match_suffix_refresh}",
-                    f"odds1_{match_suffix_refresh}",
-                    f"oddsx_{match_suffix_refresh}",
-                    f"odds2_{match_suffix_refresh}",
-                    f"odds_btts_{match_suffix_refresh}",
-                    f"dnb_home_{match_suffix_refresh}",
-                    f"dnb_away_{match_suffix_refresh}",
-                    f"over25_{match_suffix_refresh}",
-                    f"under25_{match_suffix_refresh}",
-                    f"total_co_{match_suffix_refresh}",
+                    f"spread_co_{ek}",
+                    f"odds1_{ek}",
+                    f"oddsx_{ek}",
+                    f"odds2_{ek}",
+                    f"odds_btts_{ek}",
+                    f"dnb_home_{ek}",
+                    f"dnb_away_{ek}",
+                    f"over25_{ek}",
+                    f"under25_{ek}",
+                    f"total_co_{ek}",
                 ]:
                     if k in st.session_state:
                         del st.session_state[k]
 
-                # salvo timestamp
                 st.session_state.last_refresh_ts = datetime.now().isoformat(timespec="seconds")
-                # salvo flag per mostrare il messaggio dopo il rerun
                 st.session_state.refresh_done = True
-                # salvo anche le diff per mostrarle dopo
                 st.session_state.last_refresh_diffs = diffs
-
                 st.rerun()
             else:
                 st.warning("Non sono riuscito ad aggiornare le quote.")
 
-        # dopo il rerun, se ci sono diff le mostro
+        # dopo il rerun mostro le diff
         if st.session_state.get("last_refresh_diffs"):
             if len(st.session_state.last_refresh_diffs) > 0:
                 st.subheader("📊 Quote cambiate con l'ultimo refresh")
@@ -1190,7 +1174,6 @@ if st.session_state.soccer_leagues:
                     st.write("-", d)
             else:
                 st.info("ℹ️ Refresh riuscito, ma le quote erano identiche all’ultima chiamata.")
-            # la prossima volta non le ristampo
             st.session_state.last_refresh_diffs = []
 
 # ============================================================
@@ -1224,7 +1207,6 @@ st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
 
-# stima GG se mancante
 if not api_prices.get("odds_btts") or api_prices.get("odds_btts") <= 1.01:
     api_prices["odds_btts"] = estimate_btts_from_basic_odds(
         odds_1=api_prices.get("odds_1"),
@@ -1254,7 +1236,8 @@ if (not api_prices.get("odds_dnb_away")) and odds2_tmp and oddsx_tmp:
     if dnb_away_calc:
         api_prices["odds_dnb_away"] = round(dnb_away_calc * 0.995, 3)
 
-match_suffix = f"{api_prices.get('home','')}_{api_prices.get('away','')}"
+# QUI usiamo la chiave stabile
+key_suffix = st.session_state.get("selected_event_key", "match")
 
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
@@ -1262,13 +1245,13 @@ with col_co1:
         "Spread corrente",
         value=0.0,
         step=0.25,
-        key=f"spread_co_{match_suffix}"
+        key=f"spread_co_{key_suffix}"
     )
     odds_1 = st.number_input(
         "Quota 1",
         value=float(api_prices.get("odds_1") or 1.80),
         step=0.01,
-        key=f"odds1_{match_suffix}"
+        key=f"odds1_{key_suffix}"
     )
 
 with col_co2:
@@ -1276,13 +1259,13 @@ with col_co2:
         "Total corrente",
         value=2.5,
         step=0.25,
-        key=f"total_co_{match_suffix}"
+        key=f"total_co_{key_suffix}"
     )
     odds_x = st.number_input(
         "Quota X",
         value=float(api_prices.get("odds_x") or 3.50),
         step=0.01,
-        key=f"oddsx_{match_suffix}"
+        key=f"oddsx_{key_suffix}"
     )
 
 with col_co3:
@@ -1290,13 +1273,13 @@ with col_co3:
         "Quota 2",
         value=float(api_prices.get("odds_2") or 4.50),
         step=0.01,
-        key=f"odds2_{match_suffix}"
+        key=f"odds2_{key_suffix}"
     )
     odds_btts = st.number_input(
         "Quota GG (BTTS sì)",
         value=float(api_prices.get("odds_btts") or 1.95),
         step=0.01,
-        key=f"odds_btts_{match_suffix}"
+        key=f"odds_btts_{key_suffix}"
     )
 
 st.subheader("3.b DNB (Draw No Bet)")
@@ -1306,14 +1289,14 @@ with col_dnb1:
         "Quota DNB Casa",
         value=float(api_prices.get("odds_dnb_home") or 0.0),
         step=0.01,
-        key=f"dnb_home_{match_suffix}"
+        key=f"dnb_home_{key_suffix}"
     )
 with col_dnb2:
     odds_dnb_away = st.number_input(
         "Quota DNB Trasferta",
         value=float(api_prices.get("odds_dnb_away") or 0.0),
         step=0.01,
-        key=f"dnb_away_{match_suffix}"
+        key=f"dnb_away_{key_suffix}"
     )
 
 st.subheader("3.c Quote Over/Under 2.5")
@@ -1323,14 +1306,14 @@ with col_ou1:
         "Quota Over 2.5",
         value=float(api_prices.get("odds_over25") or 0.0),
         step=0.01,
-        key=f"over25_{match_suffix}"
+        key=f"over25_{key_suffix}"
     )
 with col_ou2:
     odds_under25 = st.number_input(
         "Quota Under 2.5",
         value=float(api_prices.get("odds_under25") or 0.0),
         step=0.01,
-        key=f"under25_{match_suffix}"
+        key=f"under25_{key_suffix}"
     )
 
 # ============================================================
