@@ -473,7 +473,15 @@ def dist_gol_da_matrice(mat: List[List[float]]):
             dh[h] += p
             da[a] += p
     return dh, da
-
+def dist_gol_totali_from_matrix(mat: List[List[float]]) -> List[float]:
+    mg = len(mat) - 1
+    # massimo totale possibile = 2*mg
+    dist = [0.0] * (2 * mg + 1)
+    for h in range(mg + 1):
+        for a in range(mg + 1):
+            tot = h + a
+            dist[tot] += mat[h][a]
+    return dist
 
 def prob_multigol_from_dist(dist: List[float], gmin: int, gmax: int) -> float:
     s = 0.0
