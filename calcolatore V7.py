@@ -739,7 +739,7 @@ scost = {
     "2": (p_away - odds_prob["2"]) * 100
 }
 
-return {
+ return {
     "lambda_home": lh,
     "lambda_away": la,
     "rho": rho,
