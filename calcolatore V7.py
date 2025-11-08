@@ -38,10 +38,6 @@ PREFERRED_BOOKS = [
 # ============================================================
 
 def _clean_prices(values: List[float], tol: float = 0.25) -> List[float]:
-    """
-    Tieni solo le quote che stanno dentro ±25% dalla media.
-    Serve a togliere il book “pazzo” che manda fuori la media.
-    """
     if not values:
         return values
     avg = sum(values) / len(values)
@@ -50,11 +46,10 @@ def _clean_prices(values: List[float], tol: float = 0.25) -> List[float]:
     return [v for v in values if low <= v <= high]
 
 # ============================================================
-#         FUNZIONI THE ODDS API (per scegliere la partita)
+#         FUNZIONI THE ODDS API
 # ============================================================
 
 def oddsapi_get_soccer_leagues() -> List[dict]:
-    """Prende tutti gli sport e filtra solo quelli di calcio."""
     try:
         r = requests.get(
             f"{THE_ODDS_BASE}/sports",
@@ -70,9 +65,6 @@ def oddsapi_get_soccer_leagues() -> List[dict]:
         return []
 
 def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
-    """
-    Prende gli eventi di una lega, provando anche a includere il BTTS.
-    """
     base_url = f"{THE_ODDS_BASE}/sports/{league_key}/odds"
     params_common = {
         "apiKey": THE_ODDS_API_KEY,
@@ -81,7 +73,7 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         "dateFormat": "iso",
     }
 
-    # 1) prova con btts
+    # 1) con btts
     try:
         r = requests.get(
             base_url,
@@ -95,7 +87,7 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
     except Exception as e:
         print("errore events (con btts):", e)
 
-    # 2) fallback senza btts
+    # 2) senza btts
     try:
         r2 = requests.get(
             base_url,
@@ -108,11 +100,9 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         print("errore events (senza btts):", e)
         return []
 
-# >>> NEW: refresh di UN solo evento
 def oddsapi_refresh_event(league_key: str, event_id: str) -> dict:
     """
-    Ricarica SOLO le quote di un evento già scelto.
-    /v4/sports/{league_key}/events/{event_id}/odds
+    Ricarica SOLO le quote di un evento già selezionato.
     """
     if not league_key or not event_id:
         return {}
@@ -136,7 +126,7 @@ def oddsapi_refresh_event(league_key: str, event_id: str) -> dict:
         return {}
 
 # ============================================================
-#  >>> NEW: stimatore di BTTS quando l’API non lo dà
+#  STIMA GG QUANDO NON ARRIVA DALL’API
 # ============================================================
 
 def estimate_btts_from_basic_odds(
@@ -146,10 +136,6 @@ def estimate_btts_from_basic_odds(
     odds_over25: float = None,
     odds_under25: float = None,
 ) -> float:
-    """
-    Prova a inventare la quota GG usando 1X2 + Over/Under.
-    Restituisce una QUOTA (es. 1.95), non una probabilità.
-    """
     def _p(odd: float) -> float:
         return 1.0 / odd if odd and odd > 1 else 0.0
 
@@ -157,37 +143,23 @@ def estimate_btts_from_basic_odds(
     p_home = _p(odds_1)
     p_away = _p(odds_2)
 
-    # se non abbiamo over, usiamo solo l'equilibrio 1x2
     if p_over == 0:
         balance = 1.0 - abs(p_home - p_away)
         gg_prob = 0.50 + (balance - 0.5) * 0.25
         gg_prob = max(0.38, min(0.70, gg_prob))
         return round(1.0 / gg_prob, 2)
 
-    # base da over
     gg_prob = 0.50 + (p_over - 0.50) * 0.9
-
-    # aggiustamento con l’equilibrio (più equilibrata → più GG)
     balance = 1.0 - abs(p_home - p_away)
     gg_prob += (balance - 0.5) * 0.20
-
-    # limiti
     gg_prob = max(0.35, min(0.75, gg_prob))
-
     return round(1.0 / gg_prob, 2)
 
 # ============================================================
-#   FUNZIONE CORRETTA PER ESTRARRE LE QUOTE
+#   ESTRATTORE QUOTE DA EVENTO
 # ============================================================
 
 def oddsapi_extract_prices(event: dict) -> dict:
-    """
-    Da 1 evento della Odds API estrae:
-    - media 1X2
-    - media Over/Under 2.5
-    - DNB Casa / DNB Trasferta
-    - quota GG (BTTS yes) se presente
-    """
     WEIGHTS = {
         "pinnacle": 1.6,
         "bet365": 1.4,
@@ -237,15 +209,13 @@ def oddsapi_extract_prices(event: dict) -> dict:
         for mk in bk.get("markets", []):
             mk_key = mk.get("key", "").lower()
 
-            # ===== 1X2 =====
+            # 1X2
             if ("h2h" in mk_key) or (mk_key == "h2h") or ("match_winner" in mk_key):
                 for o in mk.get("outcomes", []):
-                    name = (o.get("name") or "").strip()
-                    name_l = name.lower()
+                    name_l = (o.get("name") or "").strip().lower()
                     price = o.get("price")
                     if not price:
                         continue
-
                     if name_l == home_l or home_l in name_l:
                         h2h_home.append((price, w))
                     elif name_l == away_l or away_l in name_l:
@@ -253,7 +223,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     elif name_l in ["draw", "tie", "x", "pareggio"]:
                         h2h_draw.append((price, w))
 
-            # ===== TOTALS → 2.5 =====
+            # TOTALS → 2.5
             elif "totals" in mk_key or "total" in mk_key:
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
@@ -267,7 +237,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif "under" in name_l:
                             under25_list.append((price, w))
 
-            # ===== DNB =====
+            # DNB vero
             elif "draw_no_bet" in mk_key or mk_key == "dnb":
                 for o in mk.get("outcomes", []):
                     name_l = (o.get("name") or "").lower()
@@ -279,7 +249,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                     elif name_l == away_l or away_l in name_l:
                         dnb_away_list.append((price, w))
 
-            # ===== fallback: spread 0 → DNB =====
+            # SPREADS 0 → DNB
             elif mk_key == "spreads":
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
@@ -293,7 +263,7 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif name_l == away_l or away_l in name_l:
                             dnb_away_list.append((price, w))
 
-            # ===== BTTS =====
+            # BTTS
             elif "btts" in mk_key or "both_teams_to_score" in mk_key:
                 for o in mk.get("outcomes", []):
                     name_l = (o.get("name") or "").lower()
@@ -367,8 +337,6 @@ def apifootball_get_fixtures_by_date(d: str) -> list:
 # ============================================================
 #                  FUNZIONI MODELLO
 # ============================================================
-# (DA QUI: tutto il tuo blocco modellistico originale – NON lo spiego, è lo stesso)
-# --- INIZIO MODELLO ---
 
 def poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -646,10 +614,8 @@ def risultato_completo(
     odds_dnb_away: float = None,
 ) -> Dict[str, Any]:
 
-    # 1) base da 1X2
     p1, px, p2 = normalize_1x2_from_odds(odds_1, odds_x, odds_2)
 
-    # 2) se abbiamo DNB li traduciamo in probabilità e li fondiamo
     if odds_dnb_home and odds_dnb_home > 1 and odds_dnb_away and odds_dnb_away > 1:
         pdnb_home = 1 / odds_dnb_home
         pdnb_away = 1 / odds_dnb_away
@@ -661,10 +627,8 @@ def risultato_completo(
             p2 = p2 * 0.7 + pdnb_away * 0.3
             px = max(0.0, 1.0 - (p1 + p2))
 
-    # 3) lambda di partenza da spread/total
     lh, la = gol_attesi_migliorati(spread, total, p1, p2)
 
-    # 4) se ho xG li fondo
     if (xg_for_home is not None and xg_against_home is not None and
         xg_for_away is not None and xg_against_away is not None):
         lh, la = blend_lambda_market_xg(
@@ -674,7 +638,6 @@ def risultato_completo(
             w_market=0.6
         )
 
-    # 5) rho
     if odds_btts and odds_btts > 1:
         p_btts_market = 1 / odds_btts
         rho = 0.15 + (p_btts_market - 0.55) * 0.5
@@ -683,13 +646,11 @@ def risultato_completo(
         rho = 0.15 + (px * 0.4)
         rho = max(0.05, min(0.4, rho))
 
-    # 6) matrici
     mat_ft = build_score_matrix(lh, la, rho)
     ratio_ht = 0.46 + 0.02 * (total - 2.5)
     ratio_ht = max(0.35, min(0.55, ratio_ht))
     mat_ht = build_score_matrix(lh * ratio_ht, la * ratio_ht, rho)
 
-    # probabilità principali
     p_home, p_draw, p_away = calc_match_result_from_matrix(mat_ft)
     over_15, under_15 = calc_over_under_from_matrix(mat_ft, 1.5)
     over_25, under_25 = calc_over_under_from_matrix(mat_ft, 2.5)
@@ -698,26 +659,21 @@ def risultato_completo(
     btts = calc_bt_ts_from_matrix(mat_ft)
     gg_over25 = calc_gg_over25_from_matrix(mat_ft)
 
-    # pari dispari
     even_ft, odd_ft = prob_pari_dispari_from_matrix(mat_ft)
     even_ht, odd_ht = prob_pari_dispari_from_matrix(mat_ht)
 
-    # clean sheet
     cs_home, cs_away = prob_clean_sheet_from_matrix(mat_ft)
     clean_sheet_qualcuno = 1 - btts
 
-    # distribuzioni singole
     dist_home_ft, dist_away_ft = dist_gol_da_matrice(mat_ft)
     dist_home_ht, dist_away_ht = dist_gol_da_matrice(mat_ht)
 
-    # distribuzione gol totali per statistiche robuste
     dist_tot_ft = dist_gol_totali_from_matrix(mat_ft)
     odd_mass = sum(p for i, p in enumerate(dist_tot_ft) if i % 2 == 1)
     even_mass2 = 1 - odd_mass
     cover_0_2 = sum(dist_tot_ft[i] for i in range(0, min(3, len(dist_tot_ft))))
     cover_0_3 = sum(dist_tot_ft[i] for i in range(0, min(4, len(dist_tot_ft))))
 
-    # multigol
     ranges = [(0,1),(1,3),(1,4),(1,5),(2,3),(2,4),(2,5),(3,5)]
     multigol_home = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ft, a, b) for a,b in ranges}
     multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b in ranges}
@@ -733,7 +689,6 @@ def risultato_completo(
         "DC Casa o Trasferta": p_home + p_away
     }
 
-    # margini vittoria
     mg = len(mat_ft) - 1
     marg2 = marg3 = 0.0
     for h in range(mg + 1):
@@ -744,7 +699,6 @@ def risultato_completo(
             if h - a >= 3:
                 marg3 += p
 
-    # combo mercati
     combo_book = {
         "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
         "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
@@ -816,7 +770,6 @@ def risultato_completo(
         "ent_away": ent_away,
         "odds_prob": odds_prob,
         "scost": scost,
-        # statistiche nuove
         "odd_mass": odd_mass,
         "even_mass2": even_mass2,
         "cover_0_2": cover_0_2,
@@ -824,7 +777,7 @@ def risultato_completo(
     }
 
 # ============================================================
-#   NUOVE FUNZIONI: check coerenza, market pressure, confidence
+#   FUNZIONI DI CONTROLLO
 # ============================================================
 
 def check_coerenza_quote(
@@ -1035,11 +988,15 @@ if "events_for_league" not in st.session_state:
     st.session_state.events_for_league = []
 if "selected_event_prices" not in st.session_state:
     st.session_state.selected_event_prices = {}
-# per il refresh
 if "selected_league_key" not in st.session_state:
     st.session_state.selected_league_key = None
 if "selected_event_id" not in st.session_state:
     st.session_state.selected_event_id = None
+# per mostrare il messaggio persistente dopo il refresh
+if "refresh_done" not in st.session_state:
+    st.session_state.refresh_done = False
+if "last_refresh_ts" not in st.session_state:
+    st.session_state.last_refresh_ts = None
 
 # ============================================================
 #               SEZIONE STORICO + CANCELLA
@@ -1119,7 +1076,7 @@ if st.button("Genera palinsesto del giorno"):
         st.info("💡 Le prime 3–4 partite sono quelle con struttura più affidabile secondo il modello.")
 
 # ============================================================
-# 0. PRENDI PARTITA DALL’API (manuale)
+# 0. PRENDI PARTITA DALL’API
 # ============================================================
 
 st.subheader("🔍 Prendi una partita da The Odds API e riempi le quote")
@@ -1156,23 +1113,43 @@ if st.session_state.soccer_leagues:
         idx = match_labels.index(selected_match_label)
         event = st.session_state.events_for_league[idx]
 
-        # salviamo lega ed evento per refresh
+        # salva dati per refresh
         st.session_state.selected_league_key = selected_league_key
-        event_id = event.get("id") or event.get("event_id")
+        event_id = event.get("id") or event.get("event_id") or event.get("key")
         st.session_state.selected_event_id = event_id
 
         prices = oddsapi_extract_prices(event)
         st.session_state.selected_event_prices = prices
         st.success("Quote prese dall’API e precompilate più sotto ✅")
 
-        # >>> QUI il bottone di refresh con reset dei widget
+        # se ho fatto un refresh precedente mostro il messaggio
+        if st.session_state.get("refresh_done"):
+            st.success("Quote aggiornate dalla API ✅")
+            st.session_state.refresh_done = False
+
+        # mostro anche l’ora dell’ultimo refresh se c'è
+        if st.session_state.get("last_refresh_ts"):
+            st.caption(f"🕓 Ultimo refresh quote: {st.session_state.last_refresh_ts}")
+
+        # bottone refresh
         if st.button("🔁 Refresh quote partita"):
             ref_ev = oddsapi_refresh_event(
                 st.session_state.selected_league_key,
                 st.session_state.selected_event_id
             )
             if ref_ev:
+                # quote precedenti (per diff)
+                old_prices = st.session_state.get("selected_event_prices", {})
                 new_prices = oddsapi_extract_prices(ref_ev)
+
+                # diff tra prima e dopo
+                diffs = []
+                for k in ["odds_1", "odds_x", "odds_2", "odds_over25", "odds_under25", "odds_btts"]:
+                    ov = old_prices.get(k)
+                    nv = new_prices.get(k)
+                    if ov != nv:
+                        diffs.append(f"{k}: {ov} → {nv}")
+
                 st.session_state.selected_event_prices = new_prices
 
                 # ricostruisco il suffix in base alle squadre
@@ -1194,10 +1171,27 @@ if st.session_state.soccer_leagues:
                     if k in st.session_state:
                         del st.session_state[k]
 
-                st.success("Quote aggiornate dalla API ✅")
+                # salvo timestamp
+                st.session_state.last_refresh_ts = datetime.now().isoformat(timespec="seconds")
+                # salvo flag per mostrare il messaggio dopo il rerun
+                st.session_state.refresh_done = True
+                # salvo anche le diff per mostrarle dopo
+                st.session_state.last_refresh_diffs = diffs
+
                 st.rerun()
             else:
                 st.warning("Non sono riuscito ad aggiornare le quote.")
+
+        # dopo il rerun, se ci sono diff le mostro
+        if st.session_state.get("last_refresh_diffs"):
+            if len(st.session_state.last_refresh_diffs) > 0:
+                st.subheader("📊 Quote cambiate con l'ultimo refresh")
+                for d in st.session_state.last_refresh_diffs:
+                    st.write("-", d)
+            else:
+                st.info("ℹ️ Refresh riuscito, ma le quote erano identiche all’ultima chiamata.")
+            # la prossima volta non le ristampo
+            st.session_state.last_refresh_diffs = []
 
 # ============================================================
 # 1. DATI PARTITA
@@ -1223,14 +1217,14 @@ with col_ap2:
     total_ap = st.number_input("Total apertura", value=2.5, step=0.25)
 
 # ============================================================
-# 3. LINEE CORRENTI E QUOTE (con key dinamiche)
+# 3. LINEE CORRENTI E QUOTE
 # ============================================================
 
 st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
 
-# se manca BTTS lo stimiamo
+# stima GG se mancante
 if not api_prices.get("odds_btts") or api_prices.get("odds_btts") <= 1.01:
     api_prices["odds_btts"] = estimate_btts_from_basic_odds(
         odds_1=api_prices.get("odds_1"),
@@ -1240,7 +1234,6 @@ if not api_prices.get("odds_btts") or api_prices.get("odds_btts") <= 1.01:
         odds_under25=api_prices.get("odds_under25"),
     )
 
-# correzione automatica DNB
 odds1_tmp = api_prices.get("odds_1")
 oddsx_tmp = api_prices.get("odds_x")
 odds2_tmp = api_prices.get("odds_2")
@@ -1306,7 +1299,7 @@ with col_co3:
         key=f"odds_btts_{match_suffix}"
     )
 
-st.subheader("3.b DNB (Draw No Bet) – letti dallo spread 0 se disponibili")
+st.subheader("3.b DNB (Draw No Bet)")
 col_dnb1, col_dnb2 = st.columns(2)
 with col_dnb1:
     odds_dnb_home = st.number_input(
@@ -1390,7 +1383,6 @@ else:
 # ============================================================
 
 if st.button("CALCOLA MODELLO"):
-    # calcolo apertura (senza BTTS apertura)
     ris_ap = risultato_completo(
         spread_ap, total_ap,
         odds_1, odds_x, odds_2,
@@ -1401,7 +1393,6 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
-    # calcolo corrente (con BTTS dato dal form, che può essere placeholder)
     ris_co = risultato_completo(
         spread_co, total_co,
         odds_1, odds_x, odds_2,
@@ -1412,7 +1403,6 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
-    # --- Fallback quota GG se l'API non l'ha data o è 0 ---
     if not odds_btts or odds_btts <= 1.01:
         p_gg_modello = ris_co["btts"]
         if p_gg_modello and p_gg_modello > 0:
@@ -1461,7 +1451,6 @@ if st.button("CALCOLA MODELLO"):
         st.subheader("✅ Check coerenza quote")
         st.write("Quote coerenti con il modello minimo.")
 
-    # movimento
     delta_spread = spread_co - spread_ap
     delta_total = total_co - total_ap
 
@@ -1480,7 +1469,6 @@ if st.button("CALCOLA MODELLO"):
             else:
                 st.write(f"- Total sceso di {abs(delta_total):.2f} → mercato si aspetta meno gol")
 
-    # value finder
     st.subheader("💰 Value Finder")
     rows = []
 
@@ -1542,7 +1530,6 @@ if st.button("CALCOLA MODELLO"):
     df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]
     st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
-    # espansioni
     with st.expander("① Probabilità principali"):
         st.write(f"BTTS: {ris_co['btts']*100:.1f}%")
         st.write(f"No Goal: {(1 - ris_co['btts'])*100:.1f}%")
