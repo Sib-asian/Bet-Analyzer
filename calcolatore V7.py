@@ -126,19 +126,21 @@ def oddsapi_extract_prices(event: dict) -> dict:
     - media Over/Under 2.5
     - DNB Casa / DNB Trasferta
     - quota GG (BTTS yes) se presente
-    Con ponderazione: Pinnacle e Bet365 pesano di più.
+    Con pesi: Pinnacle e Bet365 pesano di più
+    Con filtro outlier per eliminare valori troppo distanti
     """
-    # pesi per bookmaker
+
+    # ⚖️ PESI PER BOOKMAKER (più alto = più influenza)
     WEIGHTS = {
-        "pinnacle": 1.4,
-        "bet365": 1.3,
+        "pinnacle": 1.6,
+        "bet365": 1.4,
         "unibet_eu": 1.2,
         "marathonbet": 1.2,
         "williamhill": 1.1,
-        "bwin": 1.1,
+        "bwin": 1.0,
         "betonlineag": 1.0,
         "10bet": 1.0,
-        "bovada": 0.9,
+        "bovada": 0.8,
     }
 
     out = {
@@ -158,12 +160,13 @@ def oddsapi_extract_prices(event: dict) -> dict:
     if not bookmakers:
         return out
 
-    # liste di tuple (price, peso)
+    # 🔧 liste di tuple (prezzo, peso)
     h2h_home, h2h_draw, h2h_away = [], [], []
     over25_list, under25_list = [], []
     dnb_home_list, dnb_away_list = [], []
     btts_list = []
 
+    # 📊 RACCOLTA QUOTE
     for bk in bookmakers:
         bk_key = bk.get("key")
         if bk_key not in WEIGHTS:
@@ -176,18 +179,18 @@ def oddsapi_extract_prices(event: dict) -> dict:
             # 1X2
             if mk_key == "h2h":
                 for o in mk.get("outcomes", []):
-                    name = o.get("name", "")
+                    name = o.get("name", "").lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    if name == out["home"]:
+                    if "home" in name:
                         h2h_home.append((price, w))
-                    elif name == out["away"]:
+                    elif "away" in name:
                         h2h_away.append((price, w))
-                    elif name.lower() in ["draw", "tie", "x"]:
+                    elif "draw" in name:
                         h2h_draw.append((price, w))
 
-            # Totals → cerchiamo la linea 2.5
+            # Over/Under 2.5
             elif mk_key == "totals":
                 for o in mk.get("outcomes", []):
                     point = o.get("point")
@@ -199,42 +202,46 @@ def oddsapi_extract_prices(event: dict) -> dict:
                         elif "under" in name:
                             under25_list.append((price, w))
 
-            # DNB ufficiale
-            elif mk_key in ["draw_no_bet", "dnb"]:
-                for o in mk.get("outcomes", []):
-                    name = o.get("name", "")
-                    price = o.get("price")
-                    if price is None:
-                        continue
-                    if name == out["home"]:
-                        dnb_home_list.append((price, w))
-                    elif name == out["away"]:
-                        dnb_away_list.append((price, w))
-
-            # fallback: spread 0 = dnb
-            elif mk_key == "spreads":
-                for o in mk.get("outcomes", []):
-                    point = o.get("point")
-                    price = o.get("price")
-                    name = o.get("name", "")
-                    if price is None:
-                        continue
-                    if point == 0 or point == 0.0:
-                        if name == out["home"]:
-                            dnb_home_list.append((price, w))
-                        elif name == out["away"]:
-                            dnb_away_list.append((price, w))
-
-            # BTTS
-            elif "btts" in mk_key or "both_teams_to_score" in mk_key:
+            # DNB (draw no bet)
+            elif mk_key in ["draw_no_bet", "draw_no_bet_home", "draw_no_bet_away"]:
                 for o in mk.get("outcomes", []):
                     name = o.get("name", "").lower()
                     price = o.get("price")
                     if not price:
                         continue
-                    if "yes" in name or "sì" in name or "si" in name:
+                    if "home" in name:
+                        dnb_home_list.append((price, w))
+                    elif "away" in name:
+                        dnb_away_list.append((price, w))
+
+            # BTTS (entrambe segnano)
+            elif "btts" in mk_key or "both_teams" in mk_key:
+                for o in mk.get("outcomes", []):
+                    name = o.get("name", "").lower()
+                    price = o.get("price")
+                    if not price:
+                        continue
+                    if "yes" in name or "sì" in name:
                         btts_list.append((price, w))
 
+    # 🧹 FILTRO OUTLIER (rimuove prezzi troppo distanti)
+    def _trim_outliers(values, tol=0.10):
+        if len(values) <= 2:
+            return values
+        avg = sum(v for v, _ in values) / len(values)
+        low, high = avg * (1 - tol), avg * (1 + tol)
+        return [(v, w) for (v, w) in values if low <= v <= high]
+
+    h2h_home = _trim_outliers(h2h_home)
+    h2h_draw = _trim_outliers(h2h_draw)
+    h2h_away = _trim_outliers(h2h_away)
+    over25_list = _trim_outliers(over25_list)
+    under25_list = _trim_outliers(under25_list)
+    dnb_home_list = _trim_outliers(dnb_home_list)
+    dnb_away_list = _trim_outliers(dnb_away_list)
+    btts_list = _trim_outliers(btts_list)
+
+    # 🧮 MEDIA PESATA
     def weighted_avg(values):
         if not values:
             return None
