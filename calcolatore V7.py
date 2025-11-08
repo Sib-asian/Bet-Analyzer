@@ -1231,10 +1231,12 @@ with col_co2:
 with col_co3:
     odds_2 = st.number_input("Quota 2", value=float(api_prices.get("odds_2") or 4.50), step=0.01)
     odds_btts = st.number_input(
-        "Quota GG (BTTS sì)",
-        value=float(api_prices.get("odds_btts") or 1.95),
-        step=0.01
+    "Quota GG (BTTS sì)",
+    value=float(api_prices.get("odds_btts") or 1.95),
+    step=0.01,
+     key=f"odds_btts_{api_prices.get('home','')}_{api_prices.get('away','')}"
     )
+
 
 # DNB precompilati
 st.subheader("3.b DNB (Draw No Bet) – letti dallo spread 0 se disponibili")
