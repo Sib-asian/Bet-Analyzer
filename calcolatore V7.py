@@ -691,11 +691,11 @@ multigol_away_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ht, a, b) for 
 combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
 combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
 
-    dc = {
-        "DC Casa o Pareggio": p_home + p_draw,
-        "DC Trasferta o Pareggio": p_away + p_draw,
-        "DC Casa o Trasferta": p_home + p_away
-    }
+dc = {
+    "DC Casa o Pareggio": p_home + p_draw,
+    "DC Trasferta o Pareggio": p_away + p_draw,
+    "DC Casa o Trasferta": p_home + p_away
+}
 
     mg = len(mat_ft) - 1
     marg2 = marg3 = 0.0
