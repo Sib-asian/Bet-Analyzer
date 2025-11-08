@@ -109,6 +109,72 @@ def oddsapi_get_events_for_league(league_key: str) -> List[dict]:
         print("errore events (senza btts):", e)
         return []
 
+# >>> NEW: refresh di UN solo evento
+def oddsapi_refresh_event(league_key: str, event_id: str) -> dict:
+    """
+    Ricarica SOLO le quote di un evento già scelto.
+    Usa l’endpoint /sports/{sport}/events/{event_id}/odds
+    """
+    if not league_key or not event_id:
+        return {}
+    base_url = f"{THE_ODDS_BASE}/sports/{league_key}/events/{event_id}/odds"
+    params = {
+        "apiKey": THE_ODDS_API_KEY,
+        "regions": "eu,uk",
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+        "markets": "h2h,totals,spreads,btts",
+    }
+    try:
+        r = requests.get(base_url, params=params, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        # l'endpoint può restituire una lista
+        if isinstance(data, list) and data:
+            return data[0]
+        return data
+    except Exception as e:
+        print("errore refresh evento:", e)
+        return {}
+
+# ============================================================
+#  >>> NEW: stimatore di BTTS quando l’API non lo dà
+# ============================================================
+
+def estimate_btts_from_basic_odds(
+    odds_1: float = None,
+    odds_x: float = None,
+    odds_2: float = None,
+    odds_over25: float = None,
+    odds_under25: float = None,
+) -> float:
+    """
+    Prova a inventare la quota GG usando 1X2 + Over/Under.
+    Restituisce una QUOTA (es. 1.95), non una probabilità.
+    """
+    def _p(odd: float) -> float:
+        return 1.0 / odd if odd and odd > 1 else 0.0
+
+    p_over = _p(odds_over25)
+    p_home = _p(odds_1)
+    p_away = _p(odds_2)
+
+    # caso senza over: ripiego solo da equilibrio 1x2
+    if p_over == 0:
+        balance = 1.0 - abs(p_home - p_away)
+        gg_prob = 0.50 + (balance - 0.5) * 0.25
+        gg_prob = max(0.38, min(0.70, gg_prob))
+        return round(1.0 / gg_prob, 2)
+
+    # caso normale con over
+    gg_prob = 0.50 + (p_over - 0.50) * 0.9
+
+    balance = 1.0 - abs(p_home - p_away)
+    gg_prob += (balance - 0.5) * 0.20
+
+    gg_prob = max(0.35, min(0.75, gg_prob))
+    return round(1.0 / gg_prob, 2)
+
 # ============================================================
 #   FUNZIONE CORRETTA PER ESTRARRE LE QUOTE
 # ============================================================
@@ -154,6 +220,8 @@ def oddsapi_extract_prices(event: dict) -> dict:
 
     bookmakers = event.get("bookmakers", [])
     if not bookmakers:
+        # >>> se proprio non c'è niente provo comunque a stimare btts
+        out["odds_btts"] = estimate_btts_from_basic_odds()
         return out
 
     h2h_home, h2h_draw, h2h_away = [], [], []
@@ -269,6 +337,16 @@ def oddsapi_extract_prices(event: dict) -> dict:
     out["odds_dnb_away"] = weighted_avg(dnb_away_list)
     out["odds_btts"] = weighted_avg(btts_list)
 
+    # >>> NEW: se il BTTS non è arrivato, lo stimiamo
+    if out["odds_btts"] is None:
+        out["odds_btts"] = estimate_btts_from_basic_odds(
+            odds_1=out["odds_1"],
+            odds_x=out["odds_x"],
+            odds_2=out["odds_2"],
+            odds_over25=out["odds_over25"],
+            odds_under25=out["odds_under25"],
+        )
+
     return out
 
 # ============================================================
@@ -290,6 +368,8 @@ def apifootball_get_fixtures_by_date(d: str) -> list:
 # ============================================================
 #                  FUNZIONI MODELLO
 # ============================================================
+# (DA QUI IN POI è tutto il tuo blocco MODELLO, lo lascio invariato)
+# --- INIZIO MODELLO ---
 
 def poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -956,6 +1036,11 @@ if "events_for_league" not in st.session_state:
     st.session_state.events_for_league = []
 if "selected_event_prices" not in st.session_state:
     st.session_state.selected_event_prices = {}
+# >>> NEW: per il refresh
+if "selected_league_key" not in st.session_state:
+    st.session_state.selected_league_key = None
+if "selected_event_id" not in st.session_state:
+    st.session_state.selected_event_id = None
 
 # ============================================================
 #               SEZIONE STORICO + CANCELLA
@@ -1071,9 +1156,29 @@ if st.session_state.soccer_leagues:
         selected_match_label = st.selectbox("4) Seleziona la partita", match_labels)
         idx = match_labels.index(selected_match_label)
         event = st.session_state.events_for_league[idx]
+
+        # >>> NEW: salviamo lega ed event id per il refresh
+        st.session_state.selected_league_key = selected_league_key
+        # l'id può chiamarsi "id" o "event_id" a seconda della risposta
+        event_id = event.get("id") or event.get("event_id")
+        st.session_state.selected_event_id = event_id
+
         prices = oddsapi_extract_prices(event)
         st.session_state.selected_event_prices = prices
         st.success("Quote prese dall’API e precompilate più sotto ✅")
+
+        # >>> NEW: bottone di refresh
+        if st.button("🔁 Refresh quote partita"):
+            ref_ev = oddsapi_refresh_event(
+                st.session_state.selected_league_key,
+                st.session_state.selected_event_id
+            )
+            if ref_ev:
+                new_prices = oddsapi_extract_prices(ref_ev)
+                st.session_state.selected_event_prices = new_prices
+                st.success("Quote aggiornate dalla API ✅")
+            else:
+                st.warning("Non sono riuscito ad aggiornare le quote.")
 
 # ============================================================
 # 1. DATI PARTITA
@@ -1106,9 +1211,15 @@ st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
 
-# se manca BTTS dall'API metto un valore di comodo (lo ricalcoliamo dopo)
+# >>> MOD: se manca BTTS dall'API calcoliamo una stima, non 1.90 fisso
 if not api_prices.get("odds_btts") or api_prices.get("odds_btts") <= 1.01:
-    api_prices["odds_btts"] = 1.90
+    api_prices["odds_btts"] = estimate_btts_from_basic_odds(
+        odds_1=api_prices.get("odds_1"),
+        odds_x=api_prices.get("odds_x"),
+        odds_2=api_prices.get("odds_2"),
+        odds_over25=api_prices.get("odds_over25"),
+        odds_under25=api_prices.get("odds_under25"),
+    )
 
 # correzione automatica DNB
 odds1_tmp = api_prices.get("odds_1")
