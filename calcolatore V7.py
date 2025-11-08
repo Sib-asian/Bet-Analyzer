@@ -697,94 +697,94 @@ dc = {
     "DC Casa o Trasferta": p_home + p_away
 }
 
-    mg = len(mat_ft) - 1
-    marg2 = marg3 = 0.0
-    for h in range(mg + 1):
-        for a in range(mg + 1):
-            p = mat_ft[h][a]
-            if h - a >= 2:
-                marg2 += p
-            if h - a >= 3:
-                marg3 += p
+mg = len(mat_ft) - 1
+marg2 = marg3 = 0.0
+for h in range(mg + 1):
+    for a in range(mg + 1):
+        p = mat_ft[h][a]
+        if h - a >= 2:
+            marg2 += p
+        if h - a >= 3:
+            marg3 += p
 
-    combo_book = {
-        "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
-        "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
-        "2 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '2', 1.5),
-        "2 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '2', 2.5),
-        "1X & Over 1.5": prob_dc_over_from_matrix(mat_ft, '1X', 1.5),
-        "X2 & Over 1.5": prob_dc_over_from_matrix(mat_ft, 'X2', 1.5),
-        "1X & Over 2.5": prob_dc_over_from_matrix(mat_ft, '1X', 2.5),
-        "X2 & Over 2.5": prob_dc_over_from_matrix(mat_ft, 'X2', 2.5),
-        "1X & BTTS": prob_dc_btts_from_matrix(mat_ft, '1X'),
-        "X2 & BTTS": prob_dc_btts_from_matrix(mat_ft, 'X2'),
-        "1 & BTTS": prob_esito_btts_from_matrix(mat_ft, '1'),
-        "2 & BTTS": prob_esito_btts_from_matrix(mat_ft, '2'),
-    }
+combo_book = {
+    "1 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '1', 1.5),
+    "1 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '1', 2.5),
+    "2 & Over 1.5": prob_esito_over_from_matrix(mat_ft, '2', 1.5),
+    "2 & Over 2.5": prob_esito_over_from_matrix(mat_ft, '2', 2.5),
+    "1X & Over 1.5": prob_dc_over_from_matrix(mat_ft, '1X', 1.5),
+    "X2 & Over 1.5": prob_dc_over_from_matrix(mat_ft, 'X2', 1.5),
+    "1X & Over 2.5": prob_dc_over_from_matrix(mat_ft, '1X', 2.5),
+    "X2 & Over 2.5": prob_dc_over_from_matrix(mat_ft, 'X2', 2.5),
+    "1X & BTTS": prob_dc_btts_from_matrix(mat_ft, '1X'),
+    "X2 & BTTS": prob_dc_btts_from_matrix(mat_ft, 'X2'),
+    "1 & BTTS": prob_esito_btts_from_matrix(mat_ft, '1'),
+    "2 & BTTS": prob_esito_btts_from_matrix(mat_ft, '2'),
+}
 
-    combo_ht_ft = combo_over_ht_ft(lh, la)
-    top10 = top_results_from_matrix(mat_ft, 10, 0.005)
+combo_ht_ft = combo_over_ht_ft(lh, la)
+top10 = top_results_from_matrix(mat_ft, 10, 0.005)
 
-    ent_home = entropia_poisson(lh)
-    ent_away = entropia_poisson(la)
+ent_home = entropia_poisson(lh)
+ent_away = entropia_poisson(la)
 
-    odds_prob = {
-        "1": decimali_a_prob(odds_1),
-        "X": decimali_a_prob(odds_x),
-        "2": decimali_a_prob(odds_2)
-    }
-    scost = {
-        "1": (p_home - odds_prob["1"]) * 100,
-        "X": (p_draw - odds_prob["X"]) * 100,
-        "2": (p_away - odds_prob["2"]) * 100
-    }
+odds_prob = {
+    "1": decimali_a_prob(odds_1),
+    "X": decimali_a_prob(odds_x),
+    "2": decimali_a_prob(odds_2)
+}
+scost = {
+    "1": (p_home - odds_prob["1"]) * 100,
+    "X": (p_draw - odds_prob["X"]) * 100,
+    "2": (p_away - odds_prob["2"]) * 100
+}
 
-    return {
-        "lambda_home": lh,
-        "lambda_away": la,
-        "rho": rho,
-        "p_home": p_home,
-        "p_draw": p_draw,
-        "p_away": p_away,
-        "over_15": over_15,
-        "under_15": under_15,
-        "over_25": over_25,
-        "under_25": under_25,
-        "over_35": over_35,
-        "under_35": under_35,
-        "over_05_ht": over_05_ht,
-        "btts": btts,
-        "gg_over25": gg_over25,
-        "even_ft": even_ft,
-        "odd_ft": odd_ft,
-        "even_ht": even_ht,
-        "odd_ht": odd_ht,
-        "cs_home": cs_home,
-        "cs_away": cs_away,
-        "clean_sheet_qualcuno": clean_sheet_qualcuno,
-        "multigol_home": multigol_home,
-        "multigol_away": multigol_away,
-        "multigol_home_ht": multigol_home_ht,
-        "multigol_away_ht": multigol_away_ht,
-        "dc": dc,
-        "marg2": marg2,
-        "marg3": marg3,
-        "combo_ft_filtrate": combo_ft_filtrate,
-        "combo_ht_filtrate": combo_ht_filtrate,
-        "combo_book": combo_book,
-        "combo_ht_ft": combo_ht_ft,
-        "top10": top10,
-        "ent_home": ent_home,
-        "ent_away": ent_away,
-        "odds_prob": odds_prob,
-        "scost": scost,
-            # nuove metriche statistiche globali
-        "odd_mass": odd_mass,
-        "even_mass2": even_mass2,
-        "cover_0_2": cover_0_2,
-        "cover_0_3": cover_0_3,
-    }
-    
+return {
+    "lambda_home": lh,
+    "lambda_away": la,
+    "rho": rho,
+    "p_home": p_home,
+    "p_draw": p_draw,
+    "p_away": p_away,
+    "over_15": over_15,
+    "under_15": under_15,
+    "over_25": over_25,
+    "under_25": under_25,
+    "over_35": over_35,
+    "under_35": under_35,
+    "over_05_ht": over_05_ht,
+    "btts": btts,
+    "gg_over25": gg_over25,
+    "even_ft": even_ft,
+    "odd_ft": odd_ft,
+    "even_ht": even_ht,
+    "odd_ht": odd_ht,
+    "cs_home": cs_home,
+    "cs_away": cs_away,
+    "clean_sheet_qualcuno": clean_sheet_qualcuno,
+    "multigol_home": multigol_home,
+    "multigol_away": multigol_away,
+    "multigol_home_ht": multigol_home_ht,
+    "multigol_away_ht": multigol_away_ht,
+    "dc": dc,
+    "marg2": marg2,
+    "marg3": marg3,
+    "combo_ft_filtrate": combo_ft_filtrate,
+    "combo_ht_filtrate": combo_ht_filtrate,
+    "combo_book": combo_book,
+    "combo_ht_ft": combo_ht_ft,
+    "top10": top10,
+    "ent_home": ent_home,
+    "ent_away": ent_away,
+    "odds_prob": odds_prob,
+    "scost": scost,
+        # nuove metriche statistiche globali
+    "odd_mass": odd_mass,
+    "even_mass2": even_mass2,
+    "cover_0_2": cover_0_2,
+    "cover_0_3": cover_0_3,
+}
+
 
 # ============================================================
 #   NUOVE FUNZIONI: check coerenza, market pressure, confidence
