@@ -688,8 +688,8 @@ multigol_away = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ft, a, b) for a,b
 multigol_home_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_home_ht, a, b) for a,b in ranges}
 multigol_away_ht = {f"{a}-{b}": prob_multigol_from_dist(dist_away_ht, a, b) for a,b in ranges}
 
-    combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
-    combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
+combo_ft_filtrate = combo_multigol_filtrata(multigol_home, multigol_away, 0.5)
+combo_ht_filtrate = combo_multigol_filtrata(multigol_home_ht, multigol_away_ht, 0.5)
 
     dc = {
         "DC Casa o Pareggio": p_home + p_draw,
