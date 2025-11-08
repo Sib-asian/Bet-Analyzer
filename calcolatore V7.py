@@ -478,7 +478,6 @@ def dist_gol_da_matrice(mat: List[List[float]]):
 def dist_gol_totali_from_matrix(mat: List[List[float]]) -> List[float]:
     """Distribuzione dei gol totali (0,1,2,3,...) partendo dalla matrice punteggi."""
     mg = len(mat) - 1
-    # massimo gol totali che possiamo fare con la matrice
     max_tot = mg * 2
     dist = [0.0] * (max_tot + 1)
     for h in range(mg + 1):
@@ -792,7 +791,6 @@ def risultato_completo(
         "ent_away": ent_away,
         "odds_prob": odds_prob,
         "scost": scost,
-
         # nuove metriche statistiche globali
         "odd_mass": odd_mass,
         "even_mass2": even_mass2,
@@ -1035,6 +1033,10 @@ if "events_for_league" not in st.session_state:
     st.session_state.events_for_league = []
 if "selected_event_prices" not in st.session_state:
     st.session_state.selected_event_prices = {}
+# questi sono i valori che useremo nei number_input
+for k in ["odds_1_val","odds_x_val","odds_2_val","odds_btts_val","odds_dnb_home_val","odds_dnb_away_val"]:
+    if k not in st.session_state:
+        st.session_state[k] = None
 
 # ============================================================
 #               SEZIONE STORICO + CANCELLA
@@ -1090,13 +1092,11 @@ if st.button("Genera palinsesto del giorno"):
             start_raw = ev.get("commence_time")
             if not start_raw:
                 continue
-            # la API di solito dà tipo 2025-11-08T12:00:00Z
             try:
                 dt_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
                 if dt_utc.date().isoformat() != today_iso:
                     continue
             except Exception:
-                # se non riesco a fare il parse la salto
                 continue
 
             row = valuta_evento_rapido(ev)
@@ -1155,6 +1155,15 @@ if st.session_state.soccer_leagues:
         event = st.session_state.events_for_league[idx]
         prices = oddsapi_extract_prices(event)
         st.session_state.selected_event_prices = prices
+
+        # 👉 qui forziamo i widget a prendere i nuovi valori
+        st.session_state["odds_1_val"] = float(prices.get("odds_1") or 1.80)
+        st.session_state["odds_x_val"] = float(prices.get("odds_x") or 3.50)
+        st.session_state["odds_2_val"] = float(prices.get("odds_2") or 4.50)
+        st.session_state["odds_btts_val"] = float(prices.get("odds_btts") or 1.95)
+        st.session_state["odds_dnb_home_val"] = float(prices.get("odds_dnb_home") or 0.0)
+        st.session_state["odds_dnb_away_val"] = float(prices.get("odds_dnb_away") or 0.0)
+
         st.success("Quote prese dall’API e precompilate più sotto ✅")
 
 # ============================================================
@@ -1188,17 +1197,11 @@ st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
 
-# fallback BTTS: se l'API non l'ha dato, uso il modello più avanti
-# ma devo già preparare un valore qui perché i number_input lo usano ora
-fallback_btts = api_prices.get("odds_btts")
-
-# se manca o è 0, metto un placeholder provvisorio (verrà ricalcolato dopo)
-if not fallback_btts or fallback_btts <= 1.01:
-    # metto un valore "normale" per far vedere qualcosa nel form
-    # (1.90 è un valore medio da mercato)
+# se l'API non ha dato il GG mettiamo un placeholder per il form
+if not api_prices.get("odds_btts"):
     api_prices["odds_btts"] = 1.90
 
-# 🛠 Correzione automatica DNB se mancanti (partendo dall'1X2)
+# calcolino DNB automatico se manca
 odds1_tmp = api_prices.get("odds_1")
 oddsx_tmp = api_prices.get("odds_x")
 odds2_tmp = api_prices.get("odds_2")
@@ -1209,13 +1212,11 @@ def _safe_div(a, b):
     except Exception:
         return None
 
-# DNB CASA = quota 1 * quota X / (quota 1 + quota X)
 if (not api_prices.get("odds_dnb_home")) and odds1_tmp and oddsx_tmp:
     dnb_home_calc = _safe_div(odds1_tmp * oddsx_tmp, (odds1_tmp + oddsx_tmp))
     if dnb_home_calc:
         api_prices["odds_dnb_home"] = round(dnb_home_calc * 0.995, 3)
 
-# DNB TRASFERTA = quota 2 * quota X / (quota 2 + quota X)
 if (not api_prices.get("odds_dnb_away")) and odds2_tmp and oddsx_tmp:
     dnb_away_calc = _safe_div(odds2_tmp * oddsx_tmp, (odds2_tmp + oddsx_tmp))
     if dnb_away_calc:
@@ -1224,27 +1225,51 @@ if (not api_prices.get("odds_dnb_away")) and odds2_tmp and oddsx_tmp:
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
-    odds_1 = st.number_input("Quota 1", value=float(api_prices.get("odds_1") or 1.80), step=0.01)
+    odds_1 = st.number_input(
+        "Quota 1",
+        value=st.session_state.get("odds_1_val", float(api_prices.get("odds_1") or 1.80)),
+        step=0.01,
+        key="quota_1_input"
+    )
 with col_co2:
     total_co = st.number_input("Total corrente", value=2.5, step=0.25)
-    odds_x = st.number_input("Quota X", value=float(api_prices.get("odds_x") or 3.50), step=0.01)
-with col_co3:
-    odds_2 = st.number_input("Quota 2", value=float(api_prices.get("odds_2") or 4.50), step=0.01)
-    odds_btts = st.number_input(
-    "Quota GG (BTTS sì)",
-    value=float(api_prices.get("odds_btts") or 1.95),
-    step=0.01,
-     key=f"odds_btts_{api_prices.get('home','')}_{api_prices.get('away','')}"
+    odds_x = st.number_input(
+        "Quota X",
+        value=st.session_state.get("odds_x_val", float(api_prices.get("odds_x") or 3.50)),
+        step=0.01,
+        key="quota_x_input"
     )
-
+with col_co3:
+    odds_2 = st.number_input(
+        "Quota 2",
+        value=st.session_state.get("odds_2_val", float(api_prices.get("odds_2") or 4.50)),
+        step=0.01,
+        key="quota_2_input"
+    )
+    odds_btts = st.number_input(
+        "Quota GG (BTTS sì)",
+        value=st.session_state.get("odds_btts_val", float(api_prices.get("odds_btts") or 1.95)),
+        step=0.01,
+        key="quota_btts_input"
+    )
 
 # DNB precompilati
 st.subheader("3.b DNB (Draw No Bet) – letti dallo spread 0 se disponibili")
 col_dnb1, col_dnb2 = st.columns(2)
 with col_dnb1:
-    odds_dnb_home = st.number_input("Quota DNB Casa", value=float(api_prices.get("odds_dnb_home") or 0.0), step=0.01)
+    odds_dnb_home = st.number_input(
+        "Quota DNB Casa",
+        value=st.session_state.get("odds_dnb_home_val", float(api_prices.get("odds_dnb_home") or 0.0)),
+        step=0.01,
+        key="quota_dnb_home_input"
+    )
 with col_dnb2:
-    odds_dnb_away = st.number_input("Quota DNB Trasferta", value=float(api_prices.get("odds_dnb_away") or 0.0), step=0.01)
+    odds_dnb_away = st.number_input(
+        "Quota DNB Trasferta",
+        value=st.session_state.get("odds_dnb_away_val", float(api_prices.get("odds_dnb_away") or 0.0)),
+        step=0.01,
+        key="quota_dnb_away_input"
+    )
 
 # Over / Under
 st.subheader("3.c Quote Over/Under 2.5")
@@ -1327,15 +1352,13 @@ if st.button("CALCOLA MODELLO"):
         odds_dnb_away=odds_dnb_away if odds_dnb_away > 0 else None,
     )
 
-  # --- Fallback quota GG se l'API non l'ha data ---
-if not odds_btts or odds_btts <= 1.01:
-    # prendo la probabilità GG dal modello
-    p_gg_modello = ris_co["btts"]  # è un numero tra 0 e 1
-    if p_gg_modello and p_gg_modello > 0:
-        quota_gg_modello = 1 / p_gg_modello
-        # leggero margine per non essere troppo aggressivi
-        odds_btts = round(quota_gg_modello * 0.99, 3)
-  
+    # --- Fallback quota GG se l'API non l'ha data o è 1.00 ---
+    if not odds_btts or odds_btts <= 1.01:
+        p_gg_modello = ris_co["btts"]
+        if p_gg_modello and p_gg_modello > 0:
+            quota_gg_modello = 1 / p_gg_modello
+            odds_btts = round(quota_gg_modello * 0.99, 3)
+
     ent_media = (ris_co["ent_home"] + ris_co["ent_away"]) / 2
 
     warnings = check_coerenza_quote(
@@ -1456,7 +1479,7 @@ if not odds_btts or odds_btts <= 1.01:
         })
 
     df_vf = pd.DataFrame(rows)
-    df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]   # mostra solo edge ≥ 2pp
+    df_vf_pos = df_vf[df_vf["Δ pp"] >= 2]
     st.dataframe(df_vf_pos if not df_vf_pos.empty else df_vf)
 
     # espansioni
@@ -1523,7 +1546,6 @@ if not odds_btts or odds_btts <= 1.01:
         for k, v in ris_co["combo_ht_ft"].items():
             st.write(f"{k}: {v*100:.1f}%")
 
-    # nuovo expander: statistiche globali (pari/dispari robusto e coperture)
     with st.expander("⑬ Statistiche globali (pari/dispari & coperture)"):
         st.write(f"Somma gol DISPARI (robusta): {ris_co['odd_mass']*100:.1f}%")
         st.write(f"Somma gol PARI (robusta): {ris_co['even_mass2']*100:.1f}%")
@@ -1563,7 +1585,6 @@ if not odds_btts or odds_btts <= 1.01:
         "esito_reale": "",
         "risultato_reale": "",
         "match_ok": "",
-        # salviamo anche le nuove
         "odd_mass": round(ris_co["odd_mass"]*100, 2),
         "even_mass2": round(ris_co["even_mass2"]*100, 2),
         "cover_0_2": round(ris_co["cover_0_2"]*100, 2),
