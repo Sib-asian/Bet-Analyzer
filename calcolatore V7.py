@@ -1150,7 +1150,22 @@ with col_ap2:
 st.subheader("3. Linee correnti e quote (precompilate)")
 
 api_prices = st.session_state.get("selected_event_prices", {})
+# 🔧 Correzione automatica DNB se mancanti (calcolati da 1X2)
+odds1_tmp = api_prices.get("odds_1")
+oddsx_tmp = api_prices.get("odds_x")
+odds2_tmp = api_prices.get("odds_2")
 
+if not api_prices.get("odds_dnb_home") and odds1_tmp and oddsx_tmp:
+    try:
+        api_prices["odds_dnb_home"] = (odds1_tmp * oddsx_tmp) / (oddsx_tmp + odds1_tmp - 1)
+    except ZeroDivisionError:
+        pass
+
+if not api_prices.get("odds_dnb_away") and odds2_tmp and oddsx_tmp:
+    try:
+        api_prices["odds_dnb_away"] = (odds2_tmp * oddsx_tmp) / (oddsx_tmp + odds2_tmp - 1)
+    except ZeroDivisionError:
+        pass
 col_co1, col_co2, col_co3 = st.columns(3)
 with col_co1:
     spread_co = st.number_input("Spread corrente", value=0.0, step=0.25)
